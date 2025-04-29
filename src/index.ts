@@ -1,10 +1,31 @@
-// Importações Deno
-import { Application, Router } from "https://deno.land/x/oak@v12.6.1/mod.ts";
-import { Server } from "https://deno.land/x/socket_io@0.2.0/mod.ts";
+import express from 'express';
+import type { Request, Response } from 'express';
 
-// Tipos
+import { createServer } from 'node:http';
+
+import { Server } from 'socket.io';
+import cors from 'cors';
+
+
+const app = express();
+const server = createServer(app);
+
+// Configuração do CORS
+app.use(cors());
+app.use(express.json());
+
+// Configuração do Socket.IO
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
+
+// Tipos de senhas
 type TipoSenha = 'O' | 'L';
 
+// Estrutura do estado
 interface Chamada {
   id: string;
   senha: string;
@@ -17,111 +38,80 @@ interface Chamada {
 }
 
 interface Estado {
-  filaSenhas: Record<TipoSenha, string[]>;
+  filaSenhas: { [key in TipoSenha]: string[] };
   senhasChamadas: Chamada[];
-  contadores: Record<TipoSenha, number>;
+  contadores: { O: number; L: number };
 }
 
-// Estado inicial
+// Estado principal
 const state: Estado = {
-  filaSenhas: { O: [], L: [] },
+  filaSenhas: {
+    O: [],
+    L: []
+  },
   senhasChamadas: [],
-  contadores: { O: 0, L: 0 }
+  contadores: {
+    O: 0,
+    L: 0
+  }
 };
 
-// Configuração do servidor
-const app = new Application();
-const router = new Router();
-
-// Configuração do Socket.IO
-const io = new Server({
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
-});
-
-// Middleware para CORS
-app.use(async (ctx, next) => {
-  ctx.response.headers.set("Access-Control-Allow-Origin", "*");
-  ctx.response.headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE");
-  ctx.response.headers.set("Access-Control-Allow-Headers", "Content-Type");
-  await next();
-});
-
-// Middleware para parsear JSON
-app.use(async (ctx, next) => {
-  try {
-    if (ctx.request.hasBody) {
-      const body = ctx.request.body();
-      ctx.state.body = body.type === "json" ? await body.value : {};
-    }
-    await next();
-  } catch (err) {
-    console.error("Erro no middleware:", err);
-    ctx.response.status = 500;
-    ctx.response.body = { error: "Erro interno no servidor" };
-  }
-});
-
 // Função para gerar ID único
-const gerarId = (): string => crypto.randomUUID();
+const gerarId = () => Math.random().toString(36).substring(2, 15);
+app.get('/', (req: Request, res: Response) => {
+  res.send('Servidor BackendClinic está funcionando!');
+});
 
-// Rotas
-router.post('/gerar', async (ctx) => {
-  const { tipo } = ctx.state.body;
+// Rotas principais
+app.post('/gerar', (req: Request, res: Response) => {
+  const { tipo } = req.body;
 
   if (!tipo || !['O', 'L'].includes(tipo)) {
-    ctx.response.status = 400;
-    ctx.response.body = { error: 'Tipo inválido. Use "O" ou "L".' };
-    return;
+    return res.status(400).json({ error: 'Tipo inválido. Use "O" ou "L".' });
   }
 
-  state.contadores[tipo]++;
-  const novaSenha = `${tipo}${state.contadores[tipo].toString().padStart(3, '0')}`;
-  state.filaSenhas[tipo].push(novaSenha);
+  state.contadores[tipo as TipoSenha] += 1;
+  const novaSenha = `${tipo}${String(state.contadores[tipo as TipoSenha]).padStart(3, '0')}`;
+  state.filaSenhas[tipo as TipoSenha].push(novaSenha);
 
   io.emit('nova-senha', {
     senha: novaSenha,
     tipo,
-    numero: state.contadores[tipo],
-    posicao: state.filaSenhas[tipo].length
+    numero: state.contadores[tipo as TipoSenha],
+    posicao: state.filaSenhas[tipo as TipoSenha].length
   });
 
-  ctx.response.body = { senha: novaSenha, tipo, numero: state.contadores[tipo] };
+  res.json({ senha: novaSenha, numero: state.contadores[tipo as TipoSenha], tipo });
 });
 
-router.post('/chamar', async (ctx) => {
-  const { guiche, senha } = ctx.state.body;
+app.post('/chamar', (req: Request, res: Response) => {
+  const { guiche, senha } = req.body;
 
-  if (!guiche || !senha || typeof guiche !== 'number') {
-    ctx.response.status = 400;
-    ctx.response.body = { error: 'Dados inválidos' };
-    return;
+  if (!guiche || typeof guiche !== 'number' || guiche < 1 || guiche > 3) {
+    return res.status(400).json({ error: 'Número do guichê inválido. Deve ser 1, 2 ou 3.' });
   }
 
-  const tipo = senha[0] as TipoSenha;
-  const senhaIndex = state.filaSenhas[tipo].indexOf(senha);
+  const tipoSenha = senha[0] as TipoSenha;
 
+  if (state.filaSenhas[tipoSenha].length === 0) {
+    return res.status(400).json({ error: 'Senha não encontrada na fila' });
+  }
+
+  const senhaIndex = state.filaSenhas[tipoSenha].indexOf(senha);
   if (senhaIndex === -1) {
-    ctx.response.status = 404;
-    ctx.response.body = { error: 'Senha não encontrada' };
-    return;
+    return res.status(400).json({ error: 'Senha não encontrada na fila' });
   }
 
-  if (tipo === 'O' && guiche === 3) {
-    ctx.response.status = 400;
-    ctx.response.body = { error: 'Senha ocupacional não pode ser chamada no guichê 3' };
-    return;
+  if (tipoSenha === 'O' && guiche === 3) {
+    return res.status(400).json({ error: 'Senha ocupacional não pode ser chamada no guichê 3' });
   }
 
-  if (tipo === 'L' && guiche !== 3) {
-    ctx.response.status = 400;
-    ctx.response.body = { error: 'Senha laboratorial só pode ser chamada no guichê 3' };
-    return;
+  if (tipoSenha === 'L' && guiche !== 3) {
+    return res.status(400).json({ error: 'Senha laboratorial só pode ser chamada no guichê 3' });
   }
 
-  const [senhaChamada] = state.filaSenhas[tipo].splice(senhaIndex, 1);
+  const senhaChamada = state.filaSenhas[tipoSenha].splice(senhaIndex, 1)[0];
+
   const chamada: Chamada = {
     id: gerarId(),
     senha: senhaChamada,
@@ -133,7 +123,7 @@ router.post('/chamar', async (ctx) => {
   };
 
   state.senhasChamadas.push(chamada);
-  
+
   io.emit('senha-chamada', chamada);
   io.emit('atualizacao-fila', {
     fila: state.filaSenhas,
@@ -142,18 +132,18 @@ router.post('/chamar', async (ctx) => {
       .slice(-5)
       .reverse()
   });
+  io.emit('senha-chamada-exames', { senha: senhaChamada, guiche });
+  
+  res.json(chamada);
 
-  ctx.response.body = chamada;
+  res.json(chamada);
 });
-
-router.post('/finalizar-atendimento', async (ctx) => {
-  const { senha } = ctx.state.body;
+app.post('/finalizar-atendimento', (req: Request, res: Response) => {
+  const { senha } = req.body;
   
   const chamada = state.senhasChamadas.find(s => s.senha === senha);
   if (!chamada) {
-    ctx.response.status = 404;
-    ctx.response.body = { error: 'Senha não encontrada' };
-    return;
+    return res.status(404).json({ error: 'Senha não encontrada' });
   }
 
   chamada.finalizado = true;
@@ -161,27 +151,26 @@ router.post('/finalizar-atendimento', async (ctx) => {
   
   io.emit('senha-finalizada', { id: chamada.id });
   
-  ctx.response.body = { sucesso: true };
+  res.json({ sucesso: true });
 });
 
-router.get('/senhas-chamadas-exames', (ctx) => {
+app.get('/senhas-chamadas-exames', (req: Request, res: Response) => {
   const senhasFiltradas = state.senhasChamadas
     .filter(s => !s.finalizado && !s.encaminhadoConsultorio)
-    .reduce((acc: Record<number, string>, curr) => {
+    .reduce((acc: {[key: number]: string}, curr) => {
       acc[curr.guiche] = curr.senha;
       return acc;
     }, {});
 
-  ctx.response.body = senhasFiltradas;
+  res.json(senhasFiltradas);
 });
 
-router.post('/confirmar-exames', async (ctx) => {
-  const { senha, guiche, exames } = ctx.state.body;
+// Rotas para consultório
+app.post('/confirmar-exames', (req: Request, res: Response) => {
+  const { senha, guiche, exames } = req.body;
 
   if (!senha || !guiche || !exames || !Array.isArray(exames)) {
-    ctx.response.status = 400;
-    ctx.response.body = { error: 'Dados inválidos' };
-    return;
+    return res.status(400).json({ error: 'Dados inválidos' });
   }
 
   const chamadaExistente = state.senhasChamadas.find(s => 
@@ -189,9 +178,7 @@ router.post('/confirmar-exames', async (ctx) => {
   );
 
   if (!chamadaExistente) {
-    ctx.response.status = 404;
-    ctx.response.body = { error: 'Senha não encontrada para esse guichê' };
-    return;
+    return res.status(404).json({ error: 'Senha não encontrada para esse guichê' });
   }
 
   const examesNormalizados = [...new Set(exames.map(e => e.trim()))];
@@ -209,21 +196,19 @@ router.post('/confirmar-exames', async (ctx) => {
     atendido: false
   });
 
-  ctx.response.body = { 
+  res.json({ 
     sucesso: true, 
     senha, 
     exames: examesNormalizados 
-  };
+  });
 });
 
-router.post('/marcar-atendido', async (ctx) => {
-  const { id } = ctx.state.body;
+app.post('/marcar-atendido', (req: Request, res: Response) => {
+  const { id } = req.body;
 
   const chamada = state.senhasChamadas.find(s => s.id === id);
   if (!chamada) {
-    ctx.response.status = 404;
-    ctx.response.body = { error: 'Senha não encontrada' };
-    return;
+    return res.status(404).json({ error: 'Senha não encontrada' });
   }
 
   chamada.finalizado = true;
@@ -238,11 +223,11 @@ router.post('/marcar-atendido', async (ctx) => {
       .reverse()
   });
 
-  ctx.response.body = { sucesso: true };
+  res.json({ sucesso: true });
 });
 
-router.get('/senhas-consultorio', (ctx) => {
-  const apenasNaoAtendidos = ctx.request.url.searchParams.get('apenasNaoAtendidos') === 'true';
+app.get('/senhas-consultorio', (req: Request, res: Response) => {
+  const apenasNaoAtendidos = req.query.apenasNaoAtendidos === 'true';
   
   let senhasFiltradas = state.senhasChamadas
     .filter(s => s.exames && s.exames.length > 0 && s.encaminhadoConsultorio);
@@ -251,39 +236,37 @@ router.get('/senhas-consultorio', (ctx) => {
     senhasFiltradas = senhasFiltradas.filter(s => !s.atendido);
   }
 
-  ctx.response.body = senhasFiltradas.map(s => ({
+  res.json(senhasFiltradas.map(s => ({
     id: s.id,
     senha: s.senha,
     exames: s.exames,
     guicheOrigem: s.guiche,
     timestamp: s.timestamp
-  }));
+  })));
 });
-
-router.post('/remover-exame', async (ctx) => {
-  const { id, exame } = ctx.state.body;
+app.post('/remover-exame', (req: Request, res: Response) => {
+  const { id, exame } = req.body;
 
   if (!id || !exame) {
-    ctx.response.status = 400;
-    ctx.response.body = { error: 'ID e exame são obrigatórios' };
-    return;
+    return res.status(400).json({ error: 'ID e exame são obrigatórios' });
   }
 
+  // Procura a senha no array de chamadas
   const chamada = state.senhasChamadas.find(c => c.id === id);
+
   if (!chamada) {
-    ctx.response.status = 404;
-    ctx.response.body = { error: 'Paciente não encontrado' };
-    return;
+    return res.status(404).json({ error: 'Paciente não encontrado' });
   }
 
+  // Verifica se o exame existe na lista
   if (!chamada.exames || !chamada.exames.includes(exame)) {
-    ctx.response.status = 400;
-    ctx.response.body = { error: 'Exame não encontrado para este paciente' };
-    return;
+    return res.status(400).json({ error: 'Exame não encontrado para este paciente' });
   }
 
+  // Remove o exame da lista de exames
   chamada.exames = chamada.exames.filter(e => e !== exame);
 
+  // Se o paciente não tiver mais exames, marca como atendido
   if (chamada.exames.length === 0) {
     chamada.atendido = true;
     chamada.finalizado = true;
@@ -293,7 +276,7 @@ router.post('/remover-exame', async (ctx) => {
     s.exames && s.exames.length > 0 && !s.atendido
   ));
 
-  ctx.response.body = { 
+  res.json({ 
     success: true,
     message: 'Exame removido com sucesso',
     paciente: {
@@ -301,24 +284,26 @@ router.post('/remover-exame', async (ctx) => {
       examesRestantes: chamada.exames,
       atendido: chamada.atendido
     }
-  };
+  });
 });
 
-router.get('/estado', (ctx) => {
-  ctx.response.body = {
+// Rotas de consulta
+app.get('/estado', (req: Request, res: Response) => {
+  res.json({
     fila: state.filaSenhas,
     ultimasChamadas: state.senhasChamadas
       .filter(s => !s.finalizado)
       .slice(-5)
       .reverse(),
     contadores: state.contadores
-  };
+  });
 });
 
-// Socket.IO events
-io.on("connection", (socket) => {
-  console.log("Novo cliente conectado");
+// Socket.IO
+io.on('connection', (socket) => {
+  console.log('Novo cliente conectado');
   
+  // Envia estado inicial ao conectar
   socket.emit('estado-inicial', {
     fila: state.filaSenhas,
     ultimasChamadas: state.senhasChamadas
@@ -327,40 +312,24 @@ io.on("connection", (socket) => {
       .reverse()
   });
 
-  socket.on("disconnect", () => {
-    console.log("Cliente desconectado");
+  socket.on('disconnect', () => {
+    console.log('Cliente desconectado');
   });
 });
 
-// Limpeza periódica
+// Limpeza periódica de senhas finalizadas
 setInterval(() => {
   const agora = new Date();
   const umDia = 24 * 60 * 60 * 1000;
   
   state.senhasChamadas = state.senhasChamadas.filter(s => {
-    return !s.finalizado || (agora.getTime() - s.timestamp.getTime()) < umDia;
+    return !s.finalizado || (agora.getTime() - new Date(s.timestamp).getTime()) < umDia;
   });
-}, 3600000); // 1 hora
+}, 3600000); // A cada hora
 
 // Inicialização do servidor
-const PORT = parseInt(Deno.env.get("PORT") || "8000");
-const server = Deno.listen({ port: PORT });
-console.log(`Servidor rodando na porta ${PORT}`);
+const PORT = process.env.PORT || 3001;
 
-// Integração Oak + Socket.IO
-for await (const conn of server) {
-  const httpConn = Deno.serveHttp(conn);
-  for await (const requestEvent of httpConn) {
-    if (requestEvent.request.headers.get("upgrade") === "websocket") {
-      // @ts-ignore - Tipagem não reconhecida
-      const { socket, response } = Deno.upgradeWebSocket(requestEvent.request);
-      io.engine.on("connection", (wsSocket) => {
-        socket.onmessage = (event) => wsSocket.emit("data", event.data);
-        socket.onclose = () => wsSocket.emit("close");
-      });
-      await requestEvent.respondWith(response);
-    } else {
-      await app.handle(requestEvent.request, requestEvent.respondWith);
-    }
-  }
-}
+server.listen(PORT, () => {
+  console.log(`Servidor rodando na porta ${PORT}`);
+});
