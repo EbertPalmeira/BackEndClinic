@@ -120,7 +120,6 @@ app.post('/chamar', (req: Request, res: Response) => {
   };
 
   state.senhasChamadas.push(chamada);
-
   io.emit('senha-chamada', chamada);
   io.emit('atualizacao-fila', {
     fila: state.filaSenhas,
