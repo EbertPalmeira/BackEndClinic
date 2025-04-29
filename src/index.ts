@@ -296,7 +296,7 @@ app.get('/estado', (req: Request, res: Response) => {
 });
 
 // Socket.IO
-io.on('connection', (socket) => {
+io.on('connection', (socket: Socket) => {
   console.log('Novo cliente conectado');
   
   // Envia estado inicial ao conectar
