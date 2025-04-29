@@ -58,9 +58,20 @@ const state: Estado = {
 
 // Função para gerar ID único
 const gerarId = () => Math.random().toString(36).substring(2, 15);
-app.get('/', (req: Request, res: Response) => {
-  res.send('Servidor BackendClinic está funcionando!');
+
+
+// Rota principal para testar
+app.get('/', (req, res) => {
+  res.send('Servidor funcionando no Render!');
 });
+
+// Porta dinâmica
+const PORT = process.env.PORT || 3001;
+
+server.listen(PORT, () => {
+  console.log(`Servidor rodando na porta ${PORT}`);
+});
+
 
 // Rotas principais
 app.post('/gerar', (req: Request, res: Response) => {
@@ -327,9 +338,4 @@ setInterval(() => {
   });
 }, 3600000); // A cada hora
 
-// Inicialização do servidor
-const PORT = process.env.PORT || 10000;
 
-server.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
-});
