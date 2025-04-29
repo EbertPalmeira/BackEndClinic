@@ -1,6 +1,6 @@
-// Importações Deno (versões estáveis)
+// Importações Deno
 import { Application, Router } from "https://deno.land/x/oak@v12.6.1/mod.ts";
-import { Server, Socket } from "https://deno.land/x/socket_io@0.2.0/mod.ts";
+import { Server } from "https://deno.land/x/socket_io@0.2.0/mod.ts";
 
 // Tipos
 type TipoSenha = 'O' | 'L';
@@ -33,6 +33,14 @@ const state: Estado = {
 const app = new Application();
 const router = new Router();
 
+// Configuração do Socket.IO
+const io = new Server({
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
+
 // Middleware para CORS
 app.use(async (ctx, next) => {
   ctx.response.headers.set("Access-Control-Allow-Origin", "*");
@@ -55,16 +63,6 @@ app.use(async (ctx, next) => {
     ctx.response.body = { error: "Erro interno no servidor" };
   }
 });
-
-// Configuração do Socket.IO
-const io = new Server({
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
-});
-
-io.attach(app);
 
 // Função para gerar ID único
 const gerarId = (): string => crypto.randomUUID();
@@ -318,8 +316,8 @@ router.get('/estado', (ctx) => {
 });
 
 // Socket.IO events
-io.on("connection", (socket: Socket) => {
-  console.log("Novo cliente conectado:", socket.id);
+io.on("connection", (socket) => {
+  console.log("Novo cliente conectado");
   
   socket.emit('estado-inicial', {
     fila: state.filaSenhas,
@@ -330,7 +328,7 @@ io.on("connection", (socket: Socket) => {
   });
 
   socket.on("disconnect", () => {
-    console.log("Cliente desconectado:", socket.id);
+    console.log("Cliente desconectado");
   });
 });
 
@@ -344,10 +342,25 @@ setInterval(() => {
   });
 }, 3600000); // 1 hora
 
-// Inicialização
-app.use(router.routes());
-app.use(router.allowedMethods());
-
+// Inicialização do servidor
 const PORT = parseInt(Deno.env.get("PORT") || "8000");
-console.log(`Servidor iniciado na porta ${PORT}`);
-await app.listen({ port: PORT });
+const server = Deno.listen({ port: PORT });
+console.log(`Servidor rodando na porta ${PORT}`);
+
+// Integração Oak + Socket.IO
+for await (const conn of server) {
+  const httpConn = Deno.serveHttp(conn);
+  for await (const requestEvent of httpConn) {
+    if (requestEvent.request.headers.get("upgrade") === "websocket") {
+      // @ts-ignore - Tipagem não reconhecida
+      const { socket, response } = Deno.upgradeWebSocket(requestEvent.request);
+      io.engine.on("connection", (wsSocket) => {
+        socket.onmessage = (event) => wsSocket.emit("data", event.data);
+        socket.onclose = () => wsSocket.emit("close");
+      });
+      await requestEvent.respondWith(response);
+    } else {
+      await app.handle(requestEvent.request, requestEvent.respondWith);
+    }
+  }
+}
