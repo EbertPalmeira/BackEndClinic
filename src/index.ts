@@ -1,31 +1,10 @@
-import express from 'express';
-import type { Request, Response } from 'express';
+// Importações Deno
+import { Application, Router } from "https://deno.land/x/oak@v12.6.1/mod.ts";
+import { Server } from "https://deno.land/x/socket_io@0.2.0/mod.ts";
 
-import { createServer } from 'node:http';
-
-import { Server } from 'socket.io';
-import cors from 'cors';
-
-
-const app = express();
-const server = createServer(app);
-
-// Configuração do CORS
-app.use(cors());
-app.use(express.json());
-
-// Configuração do Socket.IO
-const io = new Server(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
-});
-
-// Tipos de senhas
+// Tipos
 type TipoSenha = 'O' | 'L';
 
-// Estrutura do estado
 interface Chamada {
   id: string;
   senha: string;
@@ -59,12 +38,53 @@ const state: Estado = {
 // Função para gerar ID único
 const gerarId = () => Math.random().toString(36).substring(2, 15);
 
+// Configuração do servidor
+const app = new Application();
+const router = new Router();
+
+// Middleware para CORS
+app.use(async (ctx, next) => {
+  ctx.response.headers.set("Access-Control-Allow-Origin", "*");
+  ctx.response.headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE");
+  ctx.response.headers.set("Access-Control-Allow-Headers", "Content-Type");
+  await next();
+});
+
+// Middleware para parsear JSON
+app.use(async (ctx, next) => {
+  try {
+    if (ctx.request.hasBody) {
+      const body = ctx.request.body();
+      if (body.type === "json") {
+        ctx.state.body = await body.value;
+      }
+    }
+    await next();
+  } catch (err) {
+    ctx.response.status = 500;
+    ctx.response.body = { error: err.message };
+  }
+});
+
+// Configuração do Socket.IO
+const io = new Server({
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
+
+// Conecta o Socket.IO ao servidor Oak
+io.attach(app);
+
 // Rotas principais
-app.post('/gerar', (req: Request, res: Response) => {
-  const { tipo } = req.body;
+router.post('/gerar', async (ctx) => {
+  const { tipo } = ctx.state.body;
 
   if (!tipo || !['O', 'L'].includes(tipo)) {
-    return res.status(400).json({ error: 'Tipo inválido. Use "O" ou "L".' });
+    ctx.response.status = 400;
+    ctx.response.body = { error: 'Tipo inválido. Use "O" ou "L".' };
+    return;
   }
 
   state.contadores[tipo as TipoSenha] += 1;
@@ -78,33 +98,43 @@ app.post('/gerar', (req: Request, res: Response) => {
     posicao: state.filaSenhas[tipo as TipoSenha].length
   });
 
-  res.json({ senha: novaSenha, numero: state.contadores[tipo as TipoSenha], tipo });
+  ctx.response.body = { senha: novaSenha, numero: state.contadores[tipo as TipoSenha], tipo };
 });
 
-app.post('/chamar', (req: Request, res: Response) => {
-  const { guiche, senha } = req.body;
+router.post('/chamar', async (ctx) => {
+  const { guiche, senha } = ctx.state.body;
 
   if (!guiche || typeof guiche !== 'number' || guiche < 1 || guiche > 3) {
-    return res.status(400).json({ error: 'Número do guichê inválido. Deve ser 1, 2 ou 3.' });
+    ctx.response.status = 400;
+    ctx.response.body = { error: 'Número do guichê inválido. Deve ser 1, 2 ou 3.' };
+    return;
   }
 
   const tipoSenha = senha[0] as TipoSenha;
 
   if (state.filaSenhas[tipoSenha].length === 0) {
-    return res.status(400).json({ error: 'Senha não encontrada na fila' });
+    ctx.response.status = 400;
+    ctx.response.body = { error: 'Senha não encontrada na fila' };
+    return;
   }
 
   const senhaIndex = state.filaSenhas[tipoSenha].indexOf(senha);
   if (senhaIndex === -1) {
-    return res.status(400).json({ error: 'Senha não encontrada na fila' });
+    ctx.response.status = 400;
+    ctx.response.body = { error: 'Senha não encontrada na fila' };
+    return;
   }
 
   if (tipoSenha === 'O' && guiche === 3) {
-    return res.status(400).json({ error: 'Senha ocupacional não pode ser chamada no guichê 3' });
+    ctx.response.status = 400;
+    ctx.response.body = { error: 'Senha ocupacional não pode ser chamada no guichê 3' };
+    return;
   }
 
   if (tipoSenha === 'L' && guiche !== 3) {
-    return res.status(400).json({ error: 'Senha laboratorial só pode ser chamada no guichê 3' });
+    ctx.response.status = 400;
+    ctx.response.body = { error: 'Senha laboratorial só pode ser chamada no guichê 3' };
+    return;
   }
 
   const senhaChamada = state.filaSenhas[tipoSenha].splice(senhaIndex, 1)[0];
@@ -130,16 +160,17 @@ app.post('/chamar', (req: Request, res: Response) => {
   });
   io.emit('senha-chamada-exames', { senha: senhaChamada, guiche });
   
-  res.json(chamada);
-
-  res.json(chamada);
+  ctx.response.body = chamada;
 });
-app.post('/finalizar-atendimento', (req: Request, res: Response) => {
-  const { senha } = req.body;
+
+router.post('/finalizar-atendimento', async (ctx) => {
+  const { senha } = ctx.state.body;
   
   const chamada = state.senhasChamadas.find(s => s.senha === senha);
   if (!chamada) {
-    return res.status(404).json({ error: 'Senha não encontrada' });
+    ctx.response.status = 404;
+    ctx.response.body = { error: 'Senha não encontrada' };
+    return;
   }
 
   chamada.finalizado = true;
@@ -147,10 +178,10 @@ app.post('/finalizar-atendimento', (req: Request, res: Response) => {
   
   io.emit('senha-finalizada', { id: chamada.id });
   
-  res.json({ sucesso: true });
+  ctx.response.body = { sucesso: true };
 });
 
-app.get('/senhas-chamadas-exames', (req: Request, res: Response) => {
+router.get('/senhas-chamadas-exames', (ctx) => {
   const senhasFiltradas = state.senhasChamadas
     .filter(s => !s.finalizado && !s.encaminhadoConsultorio)
     .reduce((acc: {[key: number]: string}, curr) => {
@@ -158,15 +189,16 @@ app.get('/senhas-chamadas-exames', (req: Request, res: Response) => {
       return acc;
     }, {});
 
-  res.json(senhasFiltradas);
+  ctx.response.body = senhasFiltradas;
 });
 
-// Rotas para consultório
-app.post('/confirmar-exames', (req: Request, res: Response) => {
-  const { senha, guiche, exames } = req.body;
+router.post('/confirmar-exames', async (ctx) => {
+  const { senha, guiche, exames } = ctx.state.body;
 
   if (!senha || !guiche || !exames || !Array.isArray(exames)) {
-    return res.status(400).json({ error: 'Dados inválidos' });
+    ctx.response.status = 400;
+    ctx.response.body = { error: 'Dados inválidos' };
+    return;
   }
 
   const chamadaExistente = state.senhasChamadas.find(s => 
@@ -174,7 +206,9 @@ app.post('/confirmar-exames', (req: Request, res: Response) => {
   );
 
   if (!chamadaExistente) {
-    return res.status(404).json({ error: 'Senha não encontrada para esse guichê' });
+    ctx.response.status = 404;
+    ctx.response.body = { error: 'Senha não encontrada para esse guichê' };
+    return;
   }
 
   const examesNormalizados = [...new Set(exames.map(e => e.trim()))];
@@ -192,19 +226,21 @@ app.post('/confirmar-exames', (req: Request, res: Response) => {
     atendido: false
   });
 
-  res.json({ 
+  ctx.response.body = { 
     sucesso: true, 
     senha, 
     exames: examesNormalizados 
-  });
+  };
 });
 
-app.post('/marcar-atendido', (req: Request, res: Response) => {
-  const { id } = req.body;
+router.post('/marcar-atendido', async (ctx) => {
+  const { id } = ctx.state.body;
 
   const chamada = state.senhasChamadas.find(s => s.id === id);
   if (!chamada) {
-    return res.status(404).json({ error: 'Senha não encontrada' });
+    ctx.response.status = 404;
+    ctx.response.body = { error: 'Senha não encontrada' };
+    return;
   }
 
   chamada.finalizado = true;
@@ -219,11 +255,11 @@ app.post('/marcar-atendido', (req: Request, res: Response) => {
       .reverse()
   });
 
-  res.json({ sucesso: true });
+  ctx.response.body = { sucesso: true };
 });
 
-app.get('/senhas-consultorio', (req: Request, res: Response) => {
-  const apenasNaoAtendidos = req.query.apenasNaoAtendidos === 'true';
+router.get('/senhas-consultorio', (ctx) => {
+  const apenasNaoAtendidos = ctx.request.url.searchParams.get('apenasNaoAtendidos') === 'true';
   
   let senhasFiltradas = state.senhasChamadas
     .filter(s => s.exames && s.exames.length > 0 && s.encaminhadoConsultorio);
@@ -232,37 +268,39 @@ app.get('/senhas-consultorio', (req: Request, res: Response) => {
     senhasFiltradas = senhasFiltradas.filter(s => !s.atendido);
   }
 
-  res.json(senhasFiltradas.map(s => ({
+  ctx.response.body = senhasFiltradas.map(s => ({
     id: s.id,
     senha: s.senha,
     exames: s.exames,
     guicheOrigem: s.guiche,
     timestamp: s.timestamp
-  })));
+  }));
 });
-app.post('/remover-exame', (req: Request, res: Response) => {
-  const { id, exame } = req.body;
+
+router.post('/remover-exame', async (ctx) => {
+  const { id, exame } = ctx.state.body;
 
   if (!id || !exame) {
-    return res.status(400).json({ error: 'ID e exame são obrigatórios' });
+    ctx.response.status = 400;
+    ctx.response.body = { error: 'ID e exame são obrigatórios' };
+    return;
   }
 
-  // Procura a senha no array de chamadas
   const chamada = state.senhasChamadas.find(c => c.id === id);
-
   if (!chamada) {
-    return res.status(404).json({ error: 'Paciente não encontrado' });
+    ctx.response.status = 404;
+    ctx.response.body = { error: 'Paciente não encontrado' };
+    return;
   }
 
-  // Verifica se o exame existe na lista
   if (!chamada.exames || !chamada.exames.includes(exame)) {
-    return res.status(400).json({ error: 'Exame não encontrado para este paciente' });
+    ctx.response.status = 400;
+    ctx.response.body = { error: 'Exame não encontrado para este paciente' };
+    return;
   }
 
-  // Remove o exame da lista de exames
   chamada.exames = chamada.exames.filter(e => e !== exame);
 
-  // Se o paciente não tiver mais exames, marca como atendido
   if (chamada.exames.length === 0) {
     chamada.atendido = true;
     chamada.finalizado = true;
@@ -272,7 +310,7 @@ app.post('/remover-exame', (req: Request, res: Response) => {
     s.exames && s.exames.length > 0 && !s.atendido
   ));
 
-  res.json({ 
+  ctx.response.body = { 
     success: true,
     message: 'Exame removido com sucesso',
     paciente: {
@@ -280,26 +318,24 @@ app.post('/remover-exame', (req: Request, res: Response) => {
       examesRestantes: chamada.exames,
       atendido: chamada.atendido
     }
-  });
+  };
 });
 
-// Rotas de consulta
-app.get('/estado', (req: Request, res: Response) => {
-  res.json({
+router.get('/estado', (ctx) => {
+  ctx.response.body = {
     fila: state.filaSenhas,
     ultimasChamadas: state.senhasChamadas
       .filter(s => !s.finalizado)
       .slice(-5)
       .reverse(),
     contadores: state.contadores
-  });
+  };
 });
 
-// Socket.IO
-io.on('connection', (socket: Socket) => {
-  console.log('Novo cliente conectado');
+// Socket.IO events
+io.on("connection", (socket) => {
+  console.log("Novo cliente conectado");
   
-  // Envia estado inicial ao conectar
   socket.emit('estado-inicial', {
     fila: state.filaSenhas,
     ultimasChamadas: state.senhasChamadas
@@ -308,8 +344,8 @@ io.on('connection', (socket: Socket) => {
       .reverse()
   });
 
-  socket.on('disconnect', () => {
-    console.log('Cliente desconectado');
+  socket.on("disconnect", () => {
+    console.log("Cliente desconectado");
   });
 });
 
@@ -323,9 +359,11 @@ setInterval(() => {
   });
 }, 3600000); // A cada hora
 
-// Inicialização do servidor
-const PORT = process.env.PORT || 3001;
+// Registra as rotas
+app.use(router.routes());
+app.use(router.allowedMethods());
 
-server.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
-});
+// Inicia o servidor
+const port = Deno.env.get("PORT") || 8000;
+console.log(`Servidor rodando em http://localhost:${port}`);
+await app.listen({ port: Number(port) });
