@@ -1,16 +1,11 @@
 import express from 'express';
 import type { Request, Response } from 'express';
-
 import { createServer } from 'node:http';
-
 import { Server } from 'socket.io';
 import cors from 'cors';
 
-
 const app = express();
 const server = createServer(app);
-app.use(express.json());
-
 
 // Configuração do CORS
 app.use(cors());
@@ -27,7 +22,7 @@ const io = new Server(server, {
 // Tipos de senhas
 type TipoSenha = 'O' | 'L';
 
-// Estrutura do estado
+// Interface estendida para incluir estado de atendimento
 interface Chamada {
   id: string;
   senha: string;
@@ -37,6 +32,8 @@ interface Chamada {
   encaminhadoConsultorio?: boolean;
   finalizado?: boolean;
   atendido?: boolean;
+  emAtendimento?: boolean;
+  exameAtual?: string | null;
 }
 
 interface Estado {
@@ -61,17 +58,10 @@ const state: Estado = {
 // Função para gerar ID único
 const gerarId = () => Math.random().toString(36).substring(2, 15);
 
-
 // Rota principal para testar
 app.get('/', (req, res) => {
   res.json({ status: 'API de senhas online ✅' });
 });
-
-// Porta dinâmica
-const PORT = process.env.PORT || 3001; 
-
-// Handler de 404 deve ser o ÚLTIMO middleware
-
 
 // Rotas principais
 app.post('/gerar', (req: Request, res: Response) => {
@@ -134,7 +124,9 @@ app.post('/chamar', (req: Request, res: Response) => {
     timestamp: new Date(),
     exames: [],
     finalizado: false,
-    atendido: false
+    atendido: false,
+    emAtendimento: false,
+    exameAtual: null
   };
 
   state.senhasChamadas.push(chamada);
@@ -151,6 +143,7 @@ app.post('/chamar', (req: Request, res: Response) => {
 
   res.json(chamada);
 });
+
 app.post('/finalizar-atendimento', (req: Request, res: Response) => {
   const { senha } = req.body;
   
@@ -161,8 +154,15 @@ app.post('/finalizar-atendimento', (req: Request, res: Response) => {
 
   chamada.finalizado = true;
   chamada.atendido = true;
+  chamada.emAtendimento = false;
+  chamada.exameAtual = null;
   
   io.emit('senha-finalizada', { id: chamada.id });
+  io.emit('atualizacao-atendimento', {
+    id: chamada.id,
+    emAtendimento: false,
+    exameAtual: null
+  });
   
   res.json({ sucesso: true });
 });
@@ -206,13 +206,41 @@ app.post('/confirmar-exames', (req: Request, res: Response) => {
     guicheOrigem: guiche,
     timestamp: new Date(),
     finalizado: false,
-    atendido: false
+    atendido: false,
+    emAtendimento: false,
+    exameAtual: null
   });
 
   res.json({ 
     sucesso: true, 
     senha, 
     exames: examesNormalizados 
+  });
+});
+
+// Nova rota para marcar em atendimento
+app.post('/marcar-em-atendimento', (req: Request, res: Response) => {
+  const { id, emAtendimento, exameAtual } = req.body;
+
+  const chamada = state.senhasChamadas.find(s => s.id === id);
+  if (!chamada) {
+    return res.status(404).json({ error: 'Senha não encontrada' });
+  }
+
+  chamada.emAtendimento = emAtendimento;
+  chamada.exameAtual = exameAtual;
+
+  io.emit('atualizacao-atendimento', {
+    id,
+    emAtendimento,
+    exameAtual
+  });
+
+  res.json({ 
+    sucesso: true,
+    senha: chamada.senha,
+    emAtendimento,
+    exameAtual
   });
 });
 
@@ -226,8 +254,15 @@ app.post('/marcar-atendido', (req: Request, res: Response) => {
 
   chamada.finalizado = true;
   chamada.atendido = true;
+  chamada.emAtendimento = false;
+  chamada.exameAtual = null;
   
   io.emit('senha-finalizada', { id });
+  io.emit('atualizacao-atendimento', {
+    id,
+    emAtendimento: false,
+    exameAtual: null
+  });
   io.emit('atualizacao-fila', {
     fila: state.filaSenhas,
     ultimasChamadas: state.senhasChamadas
@@ -254,9 +289,12 @@ app.get('/senhas-consultorio', (req: Request, res: Response) => {
     senha: s.senha,
     exames: s.exames,
     guicheOrigem: s.guiche,
-    timestamp: s.timestamp
+    timestamp: s.timestamp,
+    emAtendimento: s.emAtendimento,
+    exameAtual: s.exameAtual
   })));
 });
+
 app.post('/remover-exame', (req: Request, res: Response) => {
   const { id, exame } = req.body;
 
@@ -264,25 +302,23 @@ app.post('/remover-exame', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'ID e exame são obrigatórios' });
   }
 
-  // Procura a senha no array de chamadas
   const chamada = state.senhasChamadas.find(c => c.id === id);
 
   if (!chamada) {
     return res.status(404).json({ error: 'Paciente não encontrado' });
   }
 
-  // Verifica se o exame existe na lista
   if (!chamada.exames || !chamada.exames.includes(exame)) {
     return res.status(400).json({ error: 'Exame não encontrado para este paciente' });
   }
 
-  // Remove o exame da lista de exames
   chamada.exames = chamada.exames.filter(e => e !== exame);
 
-  // Se o paciente não tiver mais exames, marca como atendido
   if (chamada.exames.length === 0) {
     chamada.atendido = true;
     chamada.finalizado = true;
+    chamada.emAtendimento = false;
+    chamada.exameAtual = null;
   }
 
   io.emit('senha-consultorio', state.senhasChamadas.filter(s => 
@@ -316,7 +352,6 @@ app.get('/estado', (req: Request, res: Response) => {
 io.on('connection', (socket) => {
   console.log('Novo cliente conectado');
   
-  // Envia estado inicial ao conectar
   socket.emit('estado-inicial', {
     fila: state.filaSenhas,
     ultimasChamadas: state.senhasChamadas
@@ -329,6 +364,8 @@ io.on('connection', (socket) => {
     console.log('Cliente desconectado');
   });
 });
+
+// Middleware de erro
 app.use((req, res) => {
   res.status(404).json({ error: 'Endpoint não encontrado' });
 });
@@ -339,9 +376,9 @@ app.use((err: any, req: Request, res: Response, next: any) => {
 });
 
 // Inicialização do servidor
-const PORT2 = process.env.PORT || 3001;
-server.listen(PORT2, () => {
-  console.log(`Servidor rodando na porta ${PORT2}`);
+const PORT = process.env.PORT || 3001;
+server.listen(PORT, () => {
+  console.log(`Servidor rodando na porta ${PORT}`);
 });
 
 // Limpeza periódica
