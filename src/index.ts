@@ -66,7 +66,8 @@ app.get('/', (req, res) => {
 });
 
 // Porta dinâmica
-const PORT = process.env.PORT as unknown as number;
+const PORT = parseInt(process.env.PORT || '10000', 10);
+
 
 
 server.listen(PORT, () => {
