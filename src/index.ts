@@ -92,7 +92,11 @@ app.post('/gerar', (req: Request, res: Response) => {
     posicao: state.filaSenhas[tipo as TipoSenha].length
   });
 
-  res.json({ senha: novaSenha, numero: state.contadores[tipo as TipoSenha], tipo });
+  return res.json({ 
+    senha: novaSenha, 
+    numero: state.contadores[tipo as TipoSenha], 
+    tipo 
+  });
 });
 
 app.post('/chamar', (req: Request, res: Response) => {
@@ -329,22 +333,18 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Endpoint não encontrado' });
 });
 
-// Error handler vem depois
 app.use((err: any, req: Request, res: Response, next: any) => {
   console.error(err.stack);
   res.status(500).json({ error: 'Erro interno do servidor' });
 });
 
-// Modifique a inicialização do servidor
-const startServer = () => {
-  server.listen(PORT, () => {
-    console.log(`Servidor rodando na porta ${PORT}`);
-    console.log(`Teste a rota raiz em: http://localhost:${PORT}/`);
-  });
-};
+// Inicialização do servidor
+const PORT2 = process.env.PORT || 3001;
+server.listen(PORT2, () => {
+  console.log(`Servidor rodando na porta ${PORT2}`);
+});
 
-startServer();
-// Limpeza periódica de senhas finalizadas
+// Limpeza periódica
 setInterval(() => {
   const agora = new Date();
   const umDia = 24 * 60 * 60 * 1000;
@@ -352,6 +352,4 @@ setInterval(() => {
   state.senhasChamadas = state.senhasChamadas.filter(s => {
     return !s.finalizado || (agora.getTime() - new Date(s.timestamp).getTime()) < umDia;
   });
-}, 3600000); // A cada hora
-
-
+}, 3600000);
