@@ -62,7 +62,7 @@ const gerarId = () => Math.random().toString(36).substring(2, 15);
 
 // Rota principal para testar
 app.get('/', (req, res) => {
-  res.send('Servidor funcionando no Render!');
+  res.json({ status: 'API de senhas online ✅' });
 });
 
 // Porta dinâmica
