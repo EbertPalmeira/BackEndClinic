@@ -68,18 +68,26 @@ app.get('/', (req, res) => {
 // Porta dinâmica
 const PORT = process.env.PORT || 3001; 
 
+// Handler de 404 deve ser o ÚLTIMO middleware
 app.use((req, res) => {
   res.status(404).json({ error: 'Endpoint não encontrado' });
 });
 
+// Error handler vem depois
 app.use((err: any, req: Request, res: Response, next: any) => {
   console.error(err.stack);
   res.status(500).json({ error: 'Erro interno do servidor' });
 });
 
-server.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
-});
+// Modifique a inicialização do servidor
+const startServer = () => {
+  server.listen(PORT, () => {
+    console.log(`Servidor rodando na porta ${PORT}`);
+    console.log(`Teste a rota raiz em: http://localhost:${PORT}/`);
+  });
+};
+
+startServer();
 
 
 // Rotas principais
