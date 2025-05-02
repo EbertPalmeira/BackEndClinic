@@ -66,9 +66,16 @@ app.get('/', (req, res) => {
 });
 
 // Porta dinâmica
-const PORT = parseInt(process.env.PORT || '10000', 10);
+const PORT = process.env.PORT || 3001; 
 
+app.use((req, res) => {
+  res.status(404).json({ error: 'Endpoint não encontrado' });
+});
 
+app.use((err: any, req: Request, res: Response, next: any) => {
+  console.error(err.stack);
+  res.status(500).json({ error: 'Erro interno do servidor' });
+});
 
 server.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
