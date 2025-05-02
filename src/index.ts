@@ -9,6 +9,8 @@ import cors from 'cors';
 
 const app = express();
 const server = createServer(app);
+app.use(express.json());
+
 
 // Configuração do CORS
 app.use(cors());
@@ -69,25 +71,6 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 3001; 
 
 // Handler de 404 deve ser o ÚLTIMO middleware
-app.use((req, res) => {
-  res.status(404).json({ error: 'Endpoint não encontrado' });
-});
-
-// Error handler vem depois
-app.use((err: any, req: Request, res: Response, next: any) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Erro interno do servidor' });
-});
-
-// Modifique a inicialização do servidor
-const startServer = () => {
-  server.listen(PORT, () => {
-    console.log(`Servidor rodando na porta ${PORT}`);
-    console.log(`Teste a rota raiz em: http://localhost:${PORT}/`);
-  });
-};
-
-startServer();
 
 
 // Rotas principais
@@ -161,8 +144,6 @@ app.post('/chamar', (req: Request, res: Response) => {
       .reverse()
   });
   io.emit('senha-chamada-exames', { senha: senhaChamada, guiche });
-  
-  res.json(chamada);
 
   res.json(chamada);
 });
@@ -344,7 +325,25 @@ io.on('connection', (socket) => {
     console.log('Cliente desconectado');
   });
 });
+app.use((req, res) => {
+  res.status(404).json({ error: 'Endpoint não encontrado' });
+});
 
+// Error handler vem depois
+app.use((err: any, req: Request, res: Response, next: any) => {
+  console.error(err.stack);
+  res.status(500).json({ error: 'Erro interno do servidor' });
+});
+
+// Modifique a inicialização do servidor
+const startServer = () => {
+  server.listen(PORT, () => {
+    console.log(`Servidor rodando na porta ${PORT}`);
+    console.log(`Teste a rota raiz em: http://localhost:${PORT}/`);
+  });
+};
+
+startServer();
 // Limpeza periódica de senhas finalizadas
 setInterval(() => {
   const agora = new Date();
