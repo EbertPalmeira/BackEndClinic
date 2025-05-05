@@ -179,44 +179,61 @@ app.get('/senhas-chamadas-exames', (req: Request, res: Response) => {
 });
 
 // Rotas para consultório
-app.post('/confirmar-exames', (req: Request, res: Response) => {
-  const { senha, guiche, exames } = req.body;
+app.post('/confirmar-exames', async (req: Request, res: Response) => {
+  try {
+    const { senha, guiche, exames, action, id }: ExamePayload = req.body;
 
-  if (!senha || !guiche || !exames || !Array.isArray(exames)) {
-    return res.status(400).json({ error: 'Dados inválidos' });
+    // Validação básica
+    if (!senha || !guiche || !exames || !Array.isArray(exames)) {
+      return res.status(400).json({ 
+        sucesso: false,
+        mensagem: 'Dados inválidos' 
+      });
+    }
+
+    if (action === 'editar' && !id) {
+      return res.status(400).json({
+        sucesso: false,
+        mensagem: 'ID é obrigatório para edição'
+      });
+    }
+
+    // Encontra a senha no estado
+    let chamada = state.senhasChamadas.find(s => 
+      action === 'editar' ? s.id === id : s.senha === senha && s.guiche === guiche
+    );
+
+    if (!chamada) {
+      return res.status(404).json({
+        sucesso: false,
+        mensagem: 'Senha não encontrada'
+      });
+    }
+
+    // Atualiza os exames
+    chamada.exames = [...new Set(exames)]; // Remove duplicatas
+
+    if (action === 'confirmar') {
+      chamada.encaminhadoConsultorio = true;
+    }
+
+    // Notifica todos os clientes via Socket.IO
+    io.emit('senha-consultorio', chamada);
+
+    res.json({
+      sucesso: true,
+      mensagem: `Exames ${action === 'confirmar' ? 'confirmados' : 'atualizados'} com sucesso`
+    });
+
+  } catch (error) {
+    console.error('Erro em confirmar-exames:', error);
+    res.status(500).json({
+      sucesso: false,
+      mensagem: 'Erro interno no servidor'
+    });
   }
-
-  const chamadaExistente = state.senhasChamadas.find(s => 
-    s.senha === senha && s.guiche === guiche && !s.finalizado
-  );
-
-  if (!chamadaExistente) {
-    return res.status(404).json({ error: 'Senha não encontrada para esse guichê' });
-  }
-
-  const examesNormalizados = [...new Set(exames.map(e => e.trim()))];
-  
-  chamadaExistente.exames = examesNormalizados;
-  chamadaExistente.encaminhadoConsultorio = true;
-
-  io.emit('senha-consultorio', {
-    id: chamadaExistente.id,
-    senha,
-    exames: examesNormalizados,
-    guicheOrigem: guiche,
-    timestamp: new Date(),
-    finalizado: false,
-    atendido: false,
-    emAtendimento: false,
-    exameAtual: null
-  });
-
-  res.json({ 
-    sucesso: true, 
-    senha, 
-    exames: examesNormalizados 
-  });
 });
+Front
 
 // Nova rota para marcar em atendimento
 app.post('/marcar-em-atendimento', (req: Request, res: Response) => {
