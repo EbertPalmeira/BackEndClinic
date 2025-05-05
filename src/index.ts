@@ -15,7 +15,8 @@ app.use(express.json());
 const io = new Server(server, {
   cors: {
     origin: "*",
-    methods: ["GET", "POST"]
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type']
   }
 });
 
@@ -233,7 +234,7 @@ app.post('/confirmar-exames', async (req: Request, res: Response) => {
     });
   }
 });
-Front
+
 
 // Nova rota para marcar em atendimento
 app.post('/marcar-em-atendimento', (req: Request, res: Response) => {
