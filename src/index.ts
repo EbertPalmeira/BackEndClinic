@@ -1,6 +1,6 @@
 import express from 'express';
-import type { Request, Response } from 'express';
-import { createServer } from 'node:http';
+import { Request, Response, NextFunction } from 'express';
+import { createServer } from 'http'; // Mudado de 'node:http' para 'http'
 import { Server } from 'socket.io';
 import cors from 'cors';
 
@@ -396,7 +396,7 @@ app.get('/gerar-zpl', (req: Request, res: Response) => {
 });
 
 // Socket.IO
-io.on('connection', (socket:any) => {
+io.on('connection', (socket) => {
   console.log('Novo cliente conectado');
   
   socket.emit('estado-inicial', {

@@ -1,14 +1,17 @@
 {
   "compilerOptions": {
-    "target": "ES6",
-    "module": "CommonJS",
+    "target": "ES2020",
+    "module": "commonjs",
     "rootDir": "./src",
     "outDir": "./dist",
     "esModuleInterop": true,
     "strict": true,
-    "skipLibCheck": false,  // Mude para false para melhor verificação
+    "skipLibCheck": false,
     "moduleResolution": "node",
-    "lib": ["es6"],
-    "typeRoots": ["./node_modules/@types"]  // Adicione esta linha
-  }
+    "lib": ["ES2020", "DOM"],
+    "types": ["node"],
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules"]
 }
