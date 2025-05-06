@@ -86,6 +86,11 @@ const gerarZPL = (senha: string, tipo: TipoSenha): string => {
 
 // Função para imprimir na Zebra (opcional)
 const imprimirNaZebra = async (zpl: string): Promise<boolean> => {
+  if (!PRINTER_IP || PRINTER_IP === '0.0.0.0') {
+    console.log('Impressão desabilitada (nenhum IP configurado)');
+    return false;
+  }
+
   return new Promise((resolve, reject) => {
     const client = new net.Socket();
     
@@ -97,17 +102,59 @@ const imprimirNaZebra = async (zpl: string): Promise<boolean> => {
     });
 
     client.on('error', (err) => {
+      console.error('Erro de conexão com impressora:', err);
       client.destroy();
       reject(err);
     });
 
     client.on('timeout', () => {
+      console.error('Timeout de conexão com impressora');
       client.destroy();
       reject(new Error('Timeout de conexão com impressora'));
     });
+
+    client.setTimeout(5000);
   });
 };
 
+// Rota de impressão (DEVE vir antes das outras rotas se estiver usando app.use)
+app.post('/imprimir-senha', async (req: Request, res: Response) => {
+  try {
+    const { senha, tipo } = req.body;
+
+    if (!senha || !tipo) {
+      return res.status(400).json({ error: 'Parâmetros "senha" e "tipo" são obrigatórios' });
+    }
+
+    if (!['O', 'L'].includes(tipo)) {
+      return res.status(400).json({ error: 'Tipo de senha inválido' });
+    }
+
+    const zpl = gerarZPL(senha, tipo as TipoSenha);
+    
+    try {
+      await imprimirNaZebra(zpl);
+      return res.json({ 
+        success: true, 
+        message: 'Senha enviada para impressora'
+      });
+    } catch (err) {
+      console.error('Erro ao imprimir:', err);
+      return res.json({ 
+        success: false,
+        message: 'Senha gerada mas não foi possível imprimir',
+        error: err instanceof Error ? err.message : 'Erro desconhecido'
+      });
+    }
+
+  } catch (error) {
+    console.error('Erro ao processar impressão:', error);
+    return res.status(500).json({ 
+      error: 'Erro ao processar requisição',
+      details: error instanceof Error ? error.message : 'Erro desconhecido'
+    });
+  }
+});
 // Rotas Principais
 
 // 1. Gerar Senha (Original)
@@ -331,4 +378,5 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
+  console.log(`Configuração de impressora: ${PRINTER_IP || 'Desabilitada'}`);
 });
