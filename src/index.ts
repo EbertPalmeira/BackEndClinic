@@ -121,14 +121,21 @@ app.post('/imprimir-senha', async (req: Request, res: Response) => {
     }
 
     const zpl = gerarZPL(senha, tipo as TipoSenha);
+    
+    // Envia para a impressora
     await imprimirNaZebra(zpl);
 
-    res.json({ success: true, message: 'Senha enviada para impressora' });
+    // Envia também o ZPL como resposta para debug
+    res.json({ 
+      success: true, 
+      message: 'Senha enviada para impressora',
+      zpl: zpl // Para fins de debug
+    });
   } catch (error) {
     console.error('Erro ao imprimir:', error);
     res.status(500).json({ 
       error: 'Erro ao conectar na impressora',
-      details: error instanceof Error ? error.message : 'Erro desconhecido'
+      details: error instanceof Error ? error.message : String(error)
     });
   }
 });
