@@ -36,6 +36,13 @@ interface Chamada {
   emAtendimento?: boolean;
   exameAtual?: string | null;
 }
+interface ExamePayload {
+  senha: string;
+  guiche: number;
+  exames: string[];
+  action: 'confirmar' | 'editar';
+  id?: string;
+}
 
 interface Estado {
   filaSenhas: { [key in TipoSenha]: string[] };
@@ -389,7 +396,7 @@ app.get('/gerar-zpl', (req: Request, res: Response) => {
 });
 
 // Socket.IO
-io.on('connection', (socket) => {
+io.on('connection', (socket:any) => {
   console.log('Novo cliente conectado');
   
   socket.emit('estado-inicial', {
