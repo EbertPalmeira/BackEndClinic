@@ -6,10 +6,15 @@
     "outDir": "./dist",
     "esModuleInterop": true,
     "strict": true,
-    "skipLibCheck": true,
+    "skipLibCheck": false,
     "moduleResolution": "node",
     "lib": ["ES2020", "DOM"],
-    "types": []  // <-- Esta linha é crucial, deve estar VAZIA
+    "types": ["node"],
+    "forceConsistentCasingInFileNames": true,
+    "baseUrl": ".",
+    "paths": {
+      "*": ["node_modules/*"]
+    }
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules"]
