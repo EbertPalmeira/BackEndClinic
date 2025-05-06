@@ -20,7 +20,7 @@ const io = new Server(server, {
   }
 });
 
-// Tipos de senhas
+
 type TipoSenha = 'O' | 'L';
 
 // Interface estendida para incluir estado de atendimento
