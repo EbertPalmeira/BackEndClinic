@@ -365,6 +365,28 @@ app.get('/estado', (req: Request, res: Response) => {
     contadores: state.contadores
   });
 });
+// Nova rota para gerar ZPL
+app.get('/gerar-zpl', (req: Request, res: Response) => {
+  const { senha, tipo } = req.query;
+
+  if (!senha || !tipo) {
+      return res.status(400).json({ error: 'Parâmetros "senha" e "tipo" são obrigatórios' });
+  }
+
+  // Layout ZPL básico para a Zebra GC420T
+  const zpl = `
+  ^XA
+  ^CF0,40
+  ^FO50,30^FDClinica Medica^FS
+  ^FO50,80^FDSenha: ${tipo}${String(senha).padStart(3, '0')}^FS
+  ^FO50,130^FDData: ${new Date().toLocaleDateString()}^FS
+  ^FO50,180^FDHora: ${new Date().toLocaleTimeString()}^FS
+  ^XZ
+  `;
+
+  res.set('Content-Type', 'text/plain');
+  res.send(zpl);
+});
 
 // Socket.IO
 io.on('connection', (socket) => {
