@@ -4,20 +4,37 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import net from 'net';
+import dotenv from 'dotenv';
+
+// Configuração de ambiente
+dotenv.config();
 
 const app = express();
 const server = createServer(app);
 
-// Configurações básicas
-app.use(cors());
+// Configuração CORS aprimorada
+const corsOptions = {
+  origin: [
+    'http://localhost:8080',
+    'https://seu-frontend.com' // Adicione seus domínios aqui
+  ],
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
-// Configuração do Socket.IO
+// Configuração robusta do Socket.IO
 const io = new Server(server, {
-  cors: {
-    origin: "*",
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    allowedHeaders: ['Content-Type']
+  cors: corsOptions,
+  transports: ['websocket', 'polling'],
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  connectionStateRecovery: {
+    maxDisconnectionDuration: 2 * 60 * 1000, // 2 minutos
+    skipMiddlewares: true
   }
 });
 
@@ -51,7 +68,7 @@ interface Estado {
   contadores: { O: number; L: number };
 }
 
-// Estado da aplicação
+// Estado da aplicação com persistência inicial
 const state: Estado = {
   filaSenhas: { O: [], L: [] },
   senhasChamadas: [],
@@ -63,403 +80,172 @@ const gerarId = () => Math.random().toString(36).substring(2, 15);
 
 // Configuração da Impressora
 const PRINTER_IP = process.env.PRINTER_IP || '192.168.1.100';
-const PRINTER_PORT = 9100;
+const PRINTER_PORT = parseInt(process.env.PRINTER_PORT || '9100');
+const PRINTER_TIMEOUT = parseInt(process.env.PRINTER_TIMEOUT || '5000');
 
-// Função para gerar ZPL
-const gerarZPL = (senha: string, tipo: TipoSenha) => {
+// Função para gerar ZPL melhorada
+const gerarZPL = (senha: string, tipo: TipoSenha): string => {
   const numeroSenha = senha.replace(tipo, '');
   const dataHora = new Date();
   
-  return `
-  ^XA
-  ^CF0,40
-  ^FO50,30^FDClinica Médica^FS
-  ^FO50,80^FDSenha: ${tipo}${numeroSenha.padStart(3, '0')}^FS
-  ^CF0,30
-  ^FO50,130^FDTipo: ${tipo === 'O' ? 'OCUPACIONAL' : 'LABORATORIAL'}^FS
-  ^FO50,170^FDData: ${dataHora.toLocaleDateString()}^FS
-  ^FO50,210^FDHora: ${dataHora.toLocaleTimeString()}^FS
-  ^BY2,2,50
-  ^FO50,260^BC^FD${tipo}${numeroSenha.padStart(3, '0')}^FS
-  ^XZ
-  `;
+  return `^XA
+^CF0,40
+^FO50,30^FDClinica Médica^FS
+^FO50,80^FDSenha: ${tipo}${numeroSenha.padStart(3, '0')}^FS
+^CF0,30
+^FO50,130^FDTipo: ${tipo === 'O' ? 'OCUPACIONAL' : 'LABORATORIAL'}^FS
+^FO50,170^FDData: ${dataHora.toLocaleDateString('pt-BR')}^FS
+^FO50,210^FDHora: ${dataHora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}^FS
+^BY2,2,50
+^FO50,260^BC^FD${tipo}${numeroSenha.padStart(3, '0')}^FS
+^XZ`;
 };
 
-// Função para imprimir na Zebra
+// Função robusta para imprimir na Zebra
 const imprimirNaZebra = async (zpl: string): Promise<boolean> => {
   return new Promise((resolve, reject) => {
     const client = new net.Socket();
-    
-    client.connect(PRINTER_PORT, PRINTER_IP, () => {
-      client.write(zpl, 'utf8', () => {
-        client.destroy();
-        resolve(true);
+    let timeoutHandle: NodeJS.Timeout;
+
+    // Configuração de timeout
+    const cleanUp = () => {
+      clearTimeout(timeoutHandle);
+      client.destroy();
+    };
+
+    client.once('connect', () => {
+      client.write(zpl, 'utf8', (err) => {
+        cleanUp();
+        if (err) {
+          console.error('Erro ao enviar para impressora:', err);
+          reject(err);
+        } else {
+          console.log('Dados enviados para impressora com sucesso');
+          resolve(true);
+        }
       });
     });
 
-    client.setTimeout(5000);
-    
     client.on('error', (err) => {
-      client.destroy();
+      console.error('Erro de conexão com impressora:', err);
+      cleanUp();
       reject(err);
     });
 
     client.on('timeout', () => {
-      client.destroy();
-      reject(new Error('Timeout de conexão com a impressora'));
+      console.error('Timeout de conexão com impressora');
+      cleanUp();
+      reject(new Error('Timeout de conexão com impressora'));
     });
+
+    timeoutHandle = setTimeout(() => {
+      client.emit('timeout');
+    }, PRINTER_TIMEOUT);
+
+    try {
+      client.connect({
+        host: PRINTER_IP,
+        port: PRINTER_PORT,
+        noDelay: true
+      });
+    } catch (err) {
+      cleanUp();
+      reject(err);
+    }
   });
 };
 
-// Rotas de Impressão
+// Middleware para logs
+app.use((req: Request, res: Response, next: NextFunction) => {
+  console.log(`${req.method} ${req.path}`);
+  next();
+});
+
+// Rotas de Impressão Aprimoradas
 app.post('/imprimir-senha', async (req: Request, res: Response) => {
   try {
     const { senha, tipo } = req.body;
 
     if (!senha || !tipo) {
-      return res.status(400).json({ error: 'Parâmetros "senha" e "tipo" são obrigatórios' });
+      return res.status(400).json({ 
+        success: false,
+        error: 'Parâmetros "senha" e "tipo" são obrigatórios' 
+      });
+    }
+
+    if (!['O', 'L'].includes(tipo)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Tipo de senha inválido'
+      });
     }
 
     const zpl = gerarZPL(senha, tipo as TipoSenha);
-    
-    // Envia para a impressora
     await imprimirNaZebra(zpl);
 
-    // Envia também o ZPL como resposta para debug
     res.json({ 
       success: true, 
       message: 'Senha enviada para impressora',
-      zpl: zpl // Para fins de debug
+      zpl: zpl // Opcional para debug
     });
+
   } catch (error) {
     console.error('Erro ao imprimir:', error);
     res.status(500).json({ 
+      success: false,
       error: 'Erro ao conectar na impressora',
-      details: error instanceof Error ? error.message : String(error)
+      details: error instanceof Error ? error.message : 'Erro desconhecido'
     });
   }
 });
 
-app.get('/gerar-zpl', (req: Request, res: Response) => {
-  const { senha, tipo } = req.query;
-
-  if (!senha || !tipo) {
-    return res.status(400).json({ error: 'Parâmetros "senha" e "tipo" são obrigatórios' });
-  }
-
-  const zpl = gerarZPL(senha as string, tipo as TipoSenha);
-  res.set('Content-Type', 'text/plain');
-  res.send(zpl);
-});
-
-// Rotas existentes (mantidas conforme seu código original)
+// Rotas principais com validação melhorada
 app.post('/gerar', (req: Request, res: Response) => {
-  const { tipo } = req.body;
-
-  if (!tipo || !['O', 'L'].includes(tipo)) {
-    return res.status(400).json({ error: 'Tipo inválido. Use "O" ou "L".' });
-  }
-
-  state.contadores[tipo as TipoSenha] += 1;
-  const novaSenha = `${tipo}${String(state.contadores[tipo as TipoSenha]).padStart(3, '0')}`;
-  state.filaSenhas[tipo as TipoSenha].push(novaSenha);
-
-  io.emit('nova-senha', {
-    senha: novaSenha,
-    tipo,
-    numero: state.contadores[tipo as TipoSenha],
-    posicao: state.filaSenhas[tipo as TipoSenha].length
-  });
-
-  return res.json({ 
-    senha: novaSenha, 
-    numero: state.contadores[tipo as TipoSenha], 
-    tipo 
-  });
-});
-
-
-app.post('/chamar', (req: Request, res: Response) => {
-  const { guiche, senha } = req.body;
-
-  if (!guiche || typeof guiche !== 'number' || guiche < 1 || guiche > 3) {
-    return res.status(400).json({ error: 'Número do guichê inválido. Deve ser 1, 2 ou 3.' });
-  }
-
-  const tipoSenha = senha[0] as TipoSenha;
-
-  if (state.filaSenhas[tipoSenha].length === 0) {
-    return res.status(400).json({ error: 'Senha não encontrada na fila' });
-  }
-
-  const senhaIndex = state.filaSenhas[tipoSenha].indexOf(senha);
-  if (senhaIndex === -1) {
-    return res.status(400).json({ error: 'Senha não encontrada na fila' });
-  }
-
-  if (tipoSenha === 'O' && guiche === 3) {
-    return res.status(400).json({ error: 'Senha ocupacional não pode ser chamada no guichê 3' });
-  }
-
-  if (tipoSenha === 'L' && guiche !== 3) {
-    return res.status(400).json({ error: 'Senha laboratorial só pode ser chamada no guichê 3' });
-  }
-
-  const senhaChamada = state.filaSenhas[tipoSenha].splice(senhaIndex, 1)[0];
-
-  const chamada: Chamada = {
-    id: gerarId(),
-    senha: senhaChamada,
-    guiche,
-    timestamp: new Date(),
-    exames: [],
-    finalizado: false,
-    atendido: false,
-    emAtendimento: false,
-    exameAtual: null
-  };
-
-  state.senhasChamadas.push(chamada);
-
-  io.emit('senha-chamada', chamada);
-  io.emit('atualizacao-fila', {
-    fila: state.filaSenhas,
-    ultimasChamadas: state.senhasChamadas
-      .filter(s => !s.finalizado)
-      .slice(-5)
-      .reverse()
-  });
-  io.emit('senha-chamada-exames', { senha: senhaChamada, guiche });
-
-  res.json(chamada);
-});
-
-app.post('/finalizar-atendimento', (req: Request, res: Response) => {
-  const { senha } = req.body;
-  
-  const chamada = state.senhasChamadas.find(s => s.senha === senha);
-  if (!chamada) {
-    return res.status(404).json({ error: 'Senha não encontrada' });
-  }
-
-  chamada.finalizado = true;
-  chamada.atendido = true;
-  chamada.emAtendimento = false;
-  chamada.exameAtual = null;
-  
-  io.emit('senha-finalizada', { id: chamada.id });
-  io.emit('atualizacao-atendimento', {
-    id: chamada.id,
-    emAtendimento: false,
-    exameAtual: null
-  });
-  
-  res.json({ sucesso: true });
-});
-
-app.get('/senhas-chamadas-exames', (req: Request, res: Response) => {
-  const senhasFiltradas = state.senhasChamadas
-    .filter(s => !s.finalizado && !s.encaminhadoConsultorio)
-    .reduce((acc: {[key: number]: string}, curr) => {
-      acc[curr.guiche] = curr.senha;
-      return acc;
-    }, {});
-
-  res.json(senhasFiltradas);
-});
-
-// Rotas para consultório
-app.post('/confirmar-exames', async (req: Request, res: Response) => {
   try {
-    const { senha, guiche, exames, action, id }: ExamePayload = req.body;
+    const { tipo } = req.body;
 
-    // Validação básica
-    if (!senha || !guiche || !exames || !Array.isArray(exames)) {
+    if (!tipo || !['O', 'L'].includes(tipo)) {
       return res.status(400).json({ 
-        sucesso: false,
-        mensagem: 'Dados inválidos' 
+        success: false,
+        error: 'Tipo inválido. Use "O" ou "L".' 
       });
     }
 
-    if (action === 'editar' && !id) {
-      return res.status(400).json({
-        sucesso: false,
-        mensagem: 'ID é obrigatório para edição'
-      });
-    }
+    state.contadores[tipo as TipoSenha] += 1;
+    const novaSenha = `${tipo}${String(state.contadores[tipo as TipoSenha]).padStart(3, '0')}`;
+    state.filaSenhas[tipo as TipoSenha].push(novaSenha);
 
-    // Encontra a senha no estado
-    let chamada = state.senhasChamadas.find(s => 
-      action === 'editar' ? s.id === id : s.senha === senha && s.guiche === guiche
-    );
+    io.emit('nova-senha', {
+      senha: novaSenha,
+      tipo,
+      numero: state.contadores[tipo as TipoSenha],
+      posicao: state.filaSenhas[tipo as TipoSenha].length
+    });
 
-    if (!chamada) {
-      return res.status(404).json({
-        sucesso: false,
-        mensagem: 'Senha não encontrada'
-      });
-    }
-
-    // Atualiza os exames
-    chamada.exames = [...new Set(exames)]; // Remove duplicatas
-
-    if (action === 'confirmar') {
-      chamada.encaminhadoConsultorio = true;
-    }
-
-    // Notifica todos os clientes via Socket.IO
-    io.emit('senha-consultorio', chamada);
-
-    res.json({
-      sucesso: true,
-      mensagem: `Exames ${action === 'confirmar' ? 'confirmados' : 'atualizados'} com sucesso`
+    return res.json({ 
+      success: true,
+      senha: novaSenha, 
+      numero: state.contadores[tipo as TipoSenha], 
+      tipo 
     });
 
   } catch (error) {
-    console.error('Erro em confirmar-exames:', error);
+    console.error('Erro em /gerar:', error);
     res.status(500).json({
-      sucesso: false,
-      mensagem: 'Erro interno no servidor'
+      success: false,
+      error: 'Erro interno no servidor'
     });
   }
 });
 
-
-// Nova rota para marcar em atendimento
-app.post('/marcar-em-atendimento', (req: Request, res: Response) => {
-  const { id, emAtendimento, exameAtual } = req.body;
-
-  const chamada = state.senhasChamadas.find(s => s.id === id);
-  if (!chamada) {
-    return res.status(404).json({ error: 'Senha não encontrada' });
-  }
-
-  chamada.emAtendimento = emAtendimento;
-  chamada.exameAtual = exameAtual;
-
-  io.emit('atualizacao-atendimento', {
-    id,
-    emAtendimento,
-    exameAtual
-  });
-
-  res.json({ 
-    sucesso: true,
-    senha: chamada.senha,
-    emAtendimento,
-    exameAtual
-  });
-});
-
-app.post('/marcar-atendido', (req: Request, res: Response) => {
-  const { id } = req.body;
-
-  const chamada = state.senhasChamadas.find(s => s.id === id);
-  if (!chamada) {
-    return res.status(404).json({ error: 'Senha não encontrada' });
-  }
-
-  chamada.finalizado = true;
-  chamada.atendido = true;
-  chamada.emAtendimento = false;
-  chamada.exameAtual = null;
-  
-  io.emit('senha-finalizada', { id });
-  io.emit('atualizacao-atendimento', {
-    id,
-    emAtendimento: false,
-    exameAtual: null
-  });
-  io.emit('atualizacao-fila', {
-    fila: state.filaSenhas,
-    ultimasChamadas: state.senhasChamadas
-      .filter(s => !s.finalizado)
-      .slice(-5)
-      .reverse()
-  });
-
-  res.json({ sucesso: true });
-});
-
-app.get('/senhas-consultorio', (req: Request, res: Response) => {
-  const apenasNaoAtendidos = req.query.apenasNaoAtendidos === 'true';
-  
-  let senhasFiltradas = state.senhasChamadas
-    .filter(s => s.exames && s.exames.length > 0 && s.encaminhadoConsultorio);
-
-  if (apenasNaoAtendidos) {
-    senhasFiltradas = senhasFiltradas.filter(s => !s.atendido);
-  }
-
-  res.json(senhasFiltradas.map(s => ({
-    id: s.id,
-    senha: s.senha,
-    exames: s.exames,
-    guicheOrigem: s.guiche,
-    timestamp: s.timestamp,
-    emAtendimento: s.emAtendimento,
-    exameAtual: s.exameAtual
-  })));
-});
-
-app.post('/remover-exame', (req: Request, res: Response) => {
-  const { id, exame } = req.body;
-
-  if (!id || !exame) {
-    return res.status(400).json({ error: 'ID e exame são obrigatórios' });
-  }
-
-  const chamada = state.senhasChamadas.find(c => c.id === id);
-
-  if (!chamada) {
-    return res.status(404).json({ error: 'Paciente não encontrado' });
-  }
-
-  if (!chamada.exames || !chamada.exames.includes(exame)) {
-    return res.status(400).json({ error: 'Exame não encontrado para este paciente' });
-  }
-
-  chamada.exames = chamada.exames.filter(e => e !== exame);
-
-  if (chamada.exames.length === 0) {
-    chamada.atendido = true;
-    chamada.finalizado = true;
-    chamada.emAtendimento = false;
-    chamada.exameAtual = null;
-  }
-
-  io.emit('senha-consultorio', state.senhasChamadas.filter(s => 
-    s.exames && s.exames.length > 0 && !s.atendido
-  ));
-
-  res.json({ 
-    success: true,
-    message: 'Exame removido com sucesso',
-    paciente: {
-      id: chamada.id,
-      examesRestantes: chamada.exames,
-      atendido: chamada.atendido
-    }
-  });
-});
-
-// Rotas de consulta
-app.get('/estado', (req: Request, res: Response) => {
-  res.json({
-    fila: state.filaSenhas,
-    ultimasChamadas: state.senhasChamadas
-      .filter(s => !s.finalizado)
-      .slice(-5)
-      .reverse(),
-    contadores: state.contadores
-  });
-});
-
-
-// Socket.IO
+/ Socket.IO com tratamento de erros robusto
 io.on('connection', (socket) => {
-  console.log('Novo cliente conectado');
-  
+  console.log(`Novo cliente conectado: ${socket.id}`);
+
+  socket.on('error', (err) => {
+    console.error(`Erro no socket ${socket.id}:`, err);
+  });
+
   socket.emit('estado-inicial', {
     fila: state.filaSenhas,
     ultimasChamadas: state.senhasChamadas
@@ -468,34 +254,56 @@ io.on('connection', (socket) => {
       .reverse()
   });
 
-  socket.on('disconnect', () => {
-    console.log('Cliente desconectado');
+  socket.on('disconnect', (reason) => {
+    console.log(`Cliente ${socket.id} desconectado: ${reason}`);
   });
 });
 
-// Middleware de erro
-app.use((req: Request, res: Response) => {
-  res.status(404).json({ error: 'Endpoint não encontrado' });
+// Middleware de erro centralizado
+app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+  console.error('Erro não tratado:', err.stack);
+  res.status(500).json({ 
+    success: false,
+    error: 'Erro interno do servidor',
+    requestId: req.id // Adicione um ID de requisição se estiver usando
+  });
 });
 
-app.use((err: any, req: Request, res: Response, next: NextFunction) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Erro interno do servidor' });
-});
-
-// Inicialização do servidor
-const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
+// Inicialização segura do servidor
+const PORT = parseInt(process.env.PORT || '3001');
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Servidor rodando na porta ${PORT}`);
-  console.log(`Configuração da impressora: ${PRINTER_IP}:${PRINTER_PORT}`);
+  console.log(`Modo: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`Impressora configurada em: ${PRINTER_IP}:${PRINTER_PORT}`);
 });
 
-// Limpeza periódica
+// Limpeza periódica com tratamento de erros
 setInterval(() => {
-  const agora = new Date();
-  const umDia = 24 * 60 * 60 * 1000;
-  
-  state.senhasChamadas = state.senhasChamadas.filter(s => {
-    return !s.finalizado || (agora.getTime() - new Date(s.timestamp).getTime()) < umDia;
-  });
+  try {
+    const agora = new Date();
+    const umDia = 24 * 60 * 60 * 1000;
+    
+    state.senhasChamadas = state.senhasChamadas.filter(s => {
+      return !s.finalizado || (agora.getTime() - new Date(s.timestamp).getTime()) < umDia;
+    });
+  } catch (err) {
+    console.error('Erro na limpeza periódica:', err);
+  }
 }, 3600000);
+
+// Tratamento de sinais para desligamento gracioso
+process.on('SIGTERM', () => {
+  console.log('Recebido SIGTERM, encerrando servidor...');
+  server.close(() => {
+    console.log('Servidor encerrado');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('Recebido SIGINT, encerrando servidor...');
+  server.close(() => {
+    console.log('Servidor encerrado');
+    process.exit(0);
+  });
+});
