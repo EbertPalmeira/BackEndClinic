@@ -1,13 +1,14 @@
 import express from 'express';
 import { Request, Response, NextFunction } from 'express';
-import { createServer } from 'http'; // Mudado de 'node:http' para 'http'
+import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
+import net from 'net';
 
 const app = express();
 const server = createServer(app);
 
-// Configuração do CORS
+// Configurações básicas
 app.use(cors());
 app.use(express.json());
 
@@ -20,10 +21,9 @@ const io = new Server(server, {
   }
 });
 
-
+// Tipos e Interfaces
 type TipoSenha = 'O' | 'L';
 
-// Interface estendida para incluir estado de atendimento
 interface Chamada {
   id: string;
   senha: string;
@@ -36,6 +36,7 @@ interface Chamada {
   emAtendimento?: boolean;
   exameAtual?: string | null;
 }
+
 interface ExamePayload {
   senha: string;
   guiche: number;
@@ -50,28 +51,101 @@ interface Estado {
   contadores: { O: number; L: number };
 }
 
-// Estado principal
+// Estado da aplicação
 const state: Estado = {
-  filaSenhas: {
-    O: [],
-    L: []
-  },
+  filaSenhas: { O: [], L: [] },
   senhasChamadas: [],
-  contadores: {
-    O: 0,
-    L: 0
-  }
+  contadores: { O: 0, L: 0 }
 };
 
-// Função para gerar ID único
+// Utilitários
 const gerarId = () => Math.random().toString(36).substring(2, 15);
 
-// Rota principal para testar
-app.get('/', (req, res) => {
-  res.json({ status: 'API de senhas online ✅' });
+// Configuração da Impressora
+const PRINTER_IP = process.env.PRINTER_IP || '192.168.1.100';
+const PRINTER_PORT = 9100;
+
+// Função para gerar ZPL
+const gerarZPL = (senha: string, tipo: TipoSenha) => {
+  const numeroSenha = senha.replace(tipo, '');
+  const dataHora = new Date();
+  
+  return `
+  ^XA
+  ^CF0,40
+  ^FO50,30^FDClinica Médica^FS
+  ^FO50,80^FDSenha: ${tipo}${numeroSenha.padStart(3, '0')}^FS
+  ^CF0,30
+  ^FO50,130^FDTipo: ${tipo === 'O' ? 'OCUPACIONAL' : 'LABORATORIAL'}^FS
+  ^FO50,170^FDData: ${dataHora.toLocaleDateString()}^FS
+  ^FO50,210^FDHora: ${dataHora.toLocaleTimeString()}^FS
+  ^BY2,2,50
+  ^FO50,260^BC^FD${tipo}${numeroSenha.padStart(3, '0')}^FS
+  ^XZ
+  `;
+};
+
+// Função para imprimir na Zebra
+const imprimirNaZebra = async (zpl: string): Promise<boolean> => {
+  return new Promise((resolve, reject) => {
+    const client = new net.Socket();
+    
+    client.connect(PRINTER_PORT, PRINTER_IP, () => {
+      client.write(zpl, 'utf8', () => {
+        client.destroy();
+        resolve(true);
+      });
+    });
+
+    client.setTimeout(5000);
+    
+    client.on('error', (err) => {
+      client.destroy();
+      reject(err);
+    });
+
+    client.on('timeout', () => {
+      client.destroy();
+      reject(new Error('Timeout de conexão com a impressora'));
+    });
+  });
+};
+
+// Rotas de Impressão
+app.post('/imprimir-senha', async (req: Request, res: Response) => {
+  try {
+    const { senha, tipo } = req.body;
+
+    if (!senha || !tipo) {
+      return res.status(400).json({ error: 'Parâmetros "senha" e "tipo" são obrigatórios' });
+    }
+
+    const zpl = gerarZPL(senha, tipo as TipoSenha);
+    await imprimirNaZebra(zpl);
+
+    res.json({ success: true, message: 'Senha enviada para impressora' });
+  } catch (error) {
+    console.error('Erro ao imprimir:', error);
+    res.status(500).json({ 
+      error: 'Erro ao conectar na impressora',
+      details: error instanceof Error ? error.message : 'Erro desconhecido'
+    });
+  }
 });
 
-// Rotas principais
+app.get('/gerar-zpl', (req: Request, res: Response) => {
+  const { senha, tipo } = req.query;
+
+  if (!senha || !tipo) {
+    return res.status(400).json({ error: 'Parâmetros "senha" e "tipo" são obrigatórios' });
+  }
+
+  const zpl = gerarZPL(senha as string, tipo as TipoSenha);
+  res.set('Content-Type', 'text/plain');
+  res.send(zpl);
+});
+
+// Rotas existentes (mantidas conforme seu código original)
 app.post('/gerar', (req: Request, res: Response) => {
   const { tipo } = req.body;
 
@@ -96,6 +170,7 @@ app.post('/gerar', (req: Request, res: Response) => {
     tipo 
   });
 });
+
 
 app.post('/chamar', (req: Request, res: Response) => {
   const { guiche, senha } = req.body;
@@ -372,28 +447,7 @@ app.get('/estado', (req: Request, res: Response) => {
     contadores: state.contadores
   });
 });
-// Nova rota para gerar ZPL
-app.get('/gerar-zpl', (req: Request, res: Response) => {
-  const { senha, tipo } = req.query;
 
-  if (!senha || !tipo) {
-      return res.status(400).json({ error: 'Parâmetros "senha" e "tipo" são obrigatórios' });
-  }
-
-  // Layout ZPL básico para a Zebra GC420T
-  const zpl = `
-  ^XA
-  ^CF0,40
-  ^FO50,30^FDClinica Medica^FS
-  ^FO50,80^FDSenha: ${tipo}${String(senha).padStart(3, '0')}^FS
-  ^FO50,130^FDData: ${new Date().toLocaleDateString()}^FS
-  ^FO50,180^FDHora: ${new Date().toLocaleTimeString()}^FS
-  ^XZ
-  `;
-
-  res.set('Content-Type', 'text/plain');
-  res.send(zpl);
-});
 
 // Socket.IO
 io.on('connection', (socket) => {
@@ -413,11 +467,11 @@ io.on('connection', (socket) => {
 });
 
 // Middleware de erro
-app.use((req, res) => {
+app.use((req: Request, res: Response) => {
   res.status(404).json({ error: 'Endpoint não encontrado' });
 });
 
-app.use((err: any, req: Request, res: Response, next: any) => {
+app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   console.error(err.stack);
   res.status(500).json({ error: 'Erro interno do servidor' });
 });
@@ -426,6 +480,7 @@ app.use((err: any, req: Request, res: Response, next: any) => {
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
+  console.log(`Configuração da impressora: ${PRINTER_IP}:${PRINTER_PORT}`);
 });
 
 // Limpeza periódica

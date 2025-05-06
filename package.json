@@ -10,7 +10,10 @@
   "dependencies": {
     "cors": "2.8.5",
     "express": "^4.21.2",
-    "socket.io": "^4.8.1"
+    "install": "^0.13.0",
+    "net": "^1.0.2",
+    "socket.io": "^4.8.1",
+    "teste": "file:"
   },
   "devDependencies": {
     "@types/node": "^20.11.19",
