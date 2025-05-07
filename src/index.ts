@@ -334,6 +334,7 @@ app.post('/confirmar-exames', async (req: Request, res: Response) => {
 });
 
 // 6. Rota para Imprimir Senha (Alternativa)
+// Rota para Imprimir Senha - Versão garantida
 app.post('/imprimir-senha', async (req: Request, res: Response) => {
   try {
     const { senha } = req.body;
@@ -342,22 +343,51 @@ app.post('/imprimir-senha', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Parâmetro "senha" é obrigatório' });
     }
 
-    const zpl = gerarZPL(senha);
-    const impressaoOk = await imprimirNaZebra(zpl);
+    const zpl = `^XA
+^CF0,60
+^FO100,100^FD${senha}^FS
+^XZ`;
 
-    res.json({ 
-      success: impressaoOk,
-      message: impressaoOk ? 
-        'Senha enviada para impressora' : 
-        'Falha ao enviar para impressora',
-      senha
+    console.log(`Tentando imprimir: ${senha}`);
+    
+    // Simulação se não houver IP de impressora configurado
+    if (!process.env.PRINTER_IP || process.env.PRINTER_IP === '0.0.0.0') {
+      console.log('Impressão simulada (nenhum IP configurado)');
+      return res.json({ 
+        success: true, 
+        message: 'Impressão simulada com sucesso (nenhuma impressora configurada)',
+        senha
+      });
+    }
+
+    // Implementação real da impressão
+    const client = new net.Socket();
+    client.connect(9100, process.env.PRINTER_IP, () => {
+      client.write(zpl, 'ascii', () => {
+        client.destroy();
+        return res.json({ 
+          success: true, 
+          message: 'Senha enviada para impressora',
+          senha
+        });
+      });
+    });
+
+    client.on('error', (err) => {
+      console.error('Erro de impressão:', err);
+      client.destroy();
+      return res.status(500).json({ 
+        success: false,
+        message: 'Falha ao comunicar com impressora',
+        error: err.message
+      });
     });
 
   } catch (error) {
-    console.error('Erro ao imprimir:', error);
-    res.status(500).json({ 
-      error: 'Erro ao processar requisição',
-      details: error instanceof Error ? error.message : String(error)
+    console.error('Erro ao processar impressão:', error);
+    return res.status(500).json({ 
+      error: 'Erro interno ao processar requisição',
+      details: error instanceof Error ? error.message : 'Erro desconhecido'
     });
   }
 });
