@@ -13,22 +13,21 @@ const app = express();
 const server = createServer(app);
 
 // Configuração CORS
-const corsOptions = {
-  origin: [
-    'http://localhost:8080',
-    'https://seu-frontend.com'
-  ],
+app.use(cors({
+  origin: ['http://localhost:8080', 'https://seu-frontend.com'],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type'],
   credentials: true
-};
+}));
 
-app.use(cors(corsOptions));
 app.use(express.json());
 
 // Configuração do Socket.IO
 const io = new Server(server, {
-  cors: corsOptions,
+  cors: {
+    origin: ['http://localhost:8080', 'https://seu-frontend.com'],
+    methods: ['GET', 'POST']
+  },
   transports: ['websocket', 'polling']
 });
 
@@ -54,6 +53,14 @@ interface Estado {
   contadores: { O: number; L: number };
 }
 
+interface ExamePayload {
+  senha: string;
+  guiche: number;
+  exames: string[];
+  action?: string;
+  id?: string;
+}
+
 // Estado da aplicação
 const state: Estado = {
   filaSenhas: { O: [], L: [] },
@@ -64,126 +71,134 @@ const state: Estado = {
 // Utilitários
 const gerarId = () => Math.random().toString(36).substring(2, 15);
 
-// Configuração da Impressora (opcional)
+// Configuração da Impressora
 const PRINTER_IP = process.env.PRINTER_IP || '192.168.1.100';
 const PRINTER_PORT = 9100;
 
-// Função para gerar ZPL (opcional)
-const gerarZPL = (senha: string, tipo: TipoSenha): string => {
-  const numeroSenha = senha.replace(tipo, '');
-  const dataHora = new Date();
-  
+// Função para gerar ZPL (versão simplificada que já funcionou)
+const gerarZPL = (senha: string): string => {
   return `^XA
-^CF0,40
-^FO50,30^FDClinica Médica^FS
-^FO50,80^FDSenha: ${tipo}${numeroSenha.padStart(3, '0')}^FS
-^CF0,30
-^FO50,130^FDTipo: ${tipo === 'O' ? 'OCUPACIONAL' : 'LABORATORIAL'}^FS
-^FO50,170^FDData: ${dataHora.toLocaleDateString('pt-BR')}^FS
-^FO50,210^FDHora: ${dataHora.toLocaleTimeString('pt-BR')}^FS
+^CF0,60
+^FO100,100^FD${senha}^FS
 ^XZ`;
 };
 
-// Função para imprimir na Zebra (opcional)
+// Função de impressão MELHORADA
 const imprimirNaZebra = async (zpl: string): Promise<boolean> => {
-  if (!PRINTER_IP || PRINTER_IP === '0.0.0.0') {
-    console.log('Impressão desabilitada (nenhum IP configurado)');
-    return false;
-  }
-
   return new Promise((resolve, reject) => {
+    if (!PRINTER_IP || PRINTER_IP === '0.0.0.0') {
+      console.log('Impressão simulada (nenhum IP configurado)');
+      return resolve(true);
+    }
+
     const client = new net.Socket();
-    
+    let resolved = false;
+
+    client.setTimeout(10000); // 10 segundos
+
     client.connect(PRINTER_PORT, PRINTER_IP, () => {
-      client.write(zpl, 'utf8', () => {
+      console.log(`Conectado à impressora ${PRINTER_IP}:${PRINTER_PORT}`);
+      
+      client.write(zpl, 'ascii', (err) => {
+        if (err && !resolved) {
+          resolved = true;
+          reject(err);
+        } else if (!resolved) {
+          resolved = true;
+          resolve(true);
+        }
         client.destroy();
-        resolve(true);
       });
     });
 
     client.on('error', (err) => {
-      console.error('Erro de conexão com impressora:', err);
+      console.error('Erro de conexão:', err);
+      if (!resolved) {
+        resolved = true;
+        reject(err);
+      }
       client.destroy();
-      reject(err);
     });
 
     client.on('timeout', () => {
-      console.error('Timeout de conexão com impressora');
+      console.error('Timeout de conexão');
+      if (!resolved) {
+        resolved = true;
+        reject(new Error('Timeout de conexão com a impressora'));
+      }
       client.destroy();
-      reject(new Error('Timeout de conexão com impressora'));
     });
-
-    client.setTimeout(5000);
   });
 };
 
-// Rota de impressão (DEVE vir antes das outras rotas se estiver usando app.use)
-app.post('/imprimir-senha', async (req: Request, res: Response) => {
+// ======================================
+// ROTAS PRINCIPAIS (TODAS MANTIDAS)
+// ======================================
+
+// 1. Rota de teste de impressora
+app.get('/teste-impressora', async (req: Request, res: Response) => {
   try {
-    const { senha, tipo } = req.body;
-
-    if (!senha || !tipo) {
-      return res.status(400).json({ error: 'Parâmetros "senha" e "tipo" são obrigatórios' });
-    }
-
-    if (!['O', 'L'].includes(tipo)) {
-      return res.status(400).json({ error: 'Tipo de senha inválido' });
-    }
-
-    const zpl = gerarZPL(senha, tipo as TipoSenha);
+    const zpl = gerarZPL('TESTE');
+    const resultado = await imprimirNaZebra(zpl);
     
-    try {
-      await imprimirNaZebra(zpl);
-      return res.json({ 
-        success: true, 
-        message: 'Senha enviada para impressora'
-      });
-    } catch (err) {
-      console.error('Erro ao imprimir:', err);
-      return res.json({ 
-        success: false,
-        message: 'Senha gerada mas não foi possível imprimir',
-        error: err instanceof Error ? err.message : 'Erro desconhecido'
-      });
-    }
-
+    res.json({
+      success: resultado,
+      message: resultado ? 
+        'Teste enviado para impressora com sucesso' : 
+        'Falha ao enviar teste para impressora'
+    });
   } catch (error) {
-    console.error('Erro ao processar impressão:', error);
-    return res.status(500).json({ 
-      error: 'Erro ao processar requisição',
-      details: error instanceof Error ? error.message : 'Erro desconhecido'
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao testar impressora',
+      error: error instanceof Error ? error.message : String(error)
     });
   }
 });
-// Rotas Principais
 
-// 1. Gerar Senha (Original)
-app.post('/gerar', (req: Request, res: Response) => {
-  const { tipo } = req.body;
+// 2. Gerar Senha (Original + impressão)
+app.post('/gerar', async (req: Request, res: Response) => {
+  try {
+    const { tipo } = req.body;
 
-  if (!tipo || !['O', 'L'].includes(tipo)) {
-    return res.status(400).json({ error: 'Tipo inválido. Use "O" ou "L".' });
+    if (!tipo || !['O', 'L'].includes(tipo)) {
+      return res.status(400).json({ error: 'Tipo inválido. Use "O" ou "L".' });
+    }
+
+    state.contadores[tipo as TipoSenha] += 1;
+    const novaSenha = `${tipo}${String(state.contadores[tipo as TipoSenha]).padStart(3, '0')}`;
+    state.filaSenhas[tipo as TipoSenha].push(novaSenha);
+
+    // Tenta imprimir automaticamente
+    try {
+      const zpl = gerarZPL(novaSenha);
+      await imprimirNaZebra(zpl);
+    } catch (err) {
+      console.error('Erro ao imprimir (não crítico):', err);
+    }
+
+    io.emit('nova-senha', {
+      senha: novaSenha,
+      tipo,
+      numero: state.contadores[tipo as TipoSenha],
+      posicao: state.filaSenhas[tipo as TipoSenha].length
+    });
+
+    return res.json({ 
+      senha: novaSenha, 
+      numero: state.contadores[tipo as TipoSenha], 
+      tipo 
+    });
+  } catch (error) {
+    console.error('Erro em /gerar:', error);
+    return res.status(500).json({ 
+      error: 'Erro interno ao gerar senha',
+      details: error instanceof Error ? error.message : String(error)
+    });
   }
-
-  state.contadores[tipo as TipoSenha] += 1;
-  const novaSenha = `${tipo}${String(state.contadores[tipo as TipoSenha]).padStart(3, '0')}`;
-  state.filaSenhas[tipo as TipoSenha].push(novaSenha);
-
-  io.emit('nova-senha', {
-    senha: novaSenha,
-    tipo,
-    numero: state.contadores[tipo as TipoSenha],
-    posicao: state.filaSenhas[tipo as TipoSenha].length
-  });
-
-  return res.json({ 
-    senha: novaSenha, 
-    numero: state.contadores[tipo as TipoSenha], 
-    tipo 
-  });
 });
 
-// 2. Chamar Senha para Guichê (Original)
+// 3. Chamar Senha para Guichê (Original)
 app.post('/chamar', (req: Request, res: Response) => {
   const { guiche, senha } = req.body;
 
@@ -239,7 +254,7 @@ app.post('/chamar', (req: Request, res: Response) => {
   res.json(chamada);
 });
 
-// 3. Finalizar Atendimento (Original)
+// 4. Finalizar Atendimento (Original)
 app.post('/finalizar-atendimento', (req: Request, res: Response) => {
   const { senha } = req.body;
   
@@ -263,7 +278,7 @@ app.post('/finalizar-atendimento', (req: Request, res: Response) => {
   res.json({ sucesso: true });
 });
 
-// 4. Rotas para Consultório (Original)
+// 5. Rotas para Consultório (Original)
 app.post('/confirmar-exames', async (req: Request, res: Response) => {
   try {
     const { senha, guiche, exames, action, id }: ExamePayload = req.body;
@@ -297,14 +312,17 @@ app.post('/confirmar-exames', async (req: Request, res: Response) => {
 
     if (action === 'confirmar') {
       chamada.encaminhadoConsultorio = true;
+      chamada.emAtendimento = true;
+      chamada.exameAtual = chamada.exames[0] || null;
+    
+      io.emit('atualizacao-atendimento', {
+        id: chamada.id,
+        emAtendimento: true,
+        exameAtual: chamada.exameAtual
+      });
     }
-
-    io.emit('senha-consultorio', chamada);
-
-    res.json({
-      sucesso: true,
-      mensagem: `Exames ${action === 'confirmar' ? 'confirmados' : 'atualizados'} com sucesso`
-    });
+    
+    return res.json({ sucesso: true, chamada });
 
   } catch (error) {
     console.error('Erro em confirmar-exames:', error);
@@ -315,34 +333,31 @@ app.post('/confirmar-exames', async (req: Request, res: Response) => {
   }
 });
 
-// 5. Nova Rota para Imprimir Senha (Adicionada)
+// 6. Rota para Imprimir Senha (Alternativa)
 app.post('/imprimir-senha', async (req: Request, res: Response) => {
   try {
-    const { senha, tipo } = req.body;
+    const { senha } = req.body;
 
-    if (!senha || !tipo) {
-      return res.status(400).json({ error: 'Parâmetros "senha" e "tipo" são obrigatórios' });
+    if (!senha) {
+      return res.status(400).json({ error: 'Parâmetro "senha" é obrigatório' });
     }
 
-    const zpl = gerarZPL(senha, tipo as TipoSenha);
-    
-    // Tentar imprimir (opcional - não quebra o fluxo se falhar)
-    try {
-      await imprimirNaZebra(zpl);
-    } catch (err) {
-      console.error('Erro ao imprimir (não crítico):', err);
-    }
+    const zpl = gerarZPL(senha);
+    const impressaoOk = await imprimirNaZebra(zpl);
 
     res.json({ 
-      success: true, 
-      message: 'Senha processada com sucesso'
+      success: impressaoOk,
+      message: impressaoOk ? 
+        'Senha enviada para impressora' : 
+        'Falha ao enviar para impressora',
+      senha
     });
 
   } catch (error) {
-    console.error('Erro ao processar impressão:', error);
+    console.error('Erro ao imprimir:', error);
     res.status(500).json({ 
       error: 'Erro ao processar requisição',
-      details: error instanceof Error ? error.message : 'Erro desconhecido'
+      details: error instanceof Error ? error.message : String(error)
     });
   }
 });
@@ -379,4 +394,5 @@ const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
   console.log(`Configuração de impressora: ${PRINTER_IP || 'Desabilitada'}`);
+  console.log(`Teste de impressora disponível em: http://localhost:${PORT}/teste-impressora`);
 });
