@@ -1,0 +1,12 @@
+{
+    "version": 1,
+    "sites": [
+      {
+        "origin": "https://clinicshalom.netlify.app/gerar-senha",
+        "allow": true,
+        "secure": true,
+        "sign": false
+      }
+    ]
+  }
+  

@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import { createServer } from 'node:http';
 import { Server } from 'socket.io';
 import cors from 'cors';
+import net from 'net';
 
 const app = express();
 const server = createServer(app);
@@ -10,6 +11,8 @@ const server = createServer(app);
 // Configuração do CORS
 app.use(cors());
 app.use(express.json());
+app.use(cors());
+app.use(express.text({ type: '*/*' }));
 
 // Configuração do Socket.IO
 const io = new Server(server, {
@@ -41,6 +44,13 @@ interface Estado {
   filaSenhas: { [key in TipoSenha]: string[] };
   senhasChamadas: Chamada[];
   contadores: { O: number; L: number };
+}
+interface ExamePayload {
+  senha: string;
+  guiche: number;
+  exames: string[];
+  action: 'confirmar' | 'editar';
+  id?: string;
 }
 
 // Estado principal
@@ -88,6 +98,61 @@ app.post('/gerar', (req: Request, res: Response) => {
     numero: state.contadores[tipo as TipoSenha], 
     tipo 
   });
+});
+app.post('/imprimir', (req, res) => {
+  try {
+    const zpl = req.body;
+    console.log('Recebido ZPL para impressão:', zpl);
+
+    // Substitua pelo IP real da sua impressora Zebra
+    const printerIp = '192.168.1.100'; 
+    const printerPort = 9100;
+
+    const client = net.createConnection(printerPort, printerIp, () => {
+      console.log('Conectado à impressora, enviando ZPL...');
+      client.write(zpl, 'utf8', () => {
+        console.log('ZPL enviado com sucesso');
+        client.end();
+        res.status(200).json({ success: true });
+      });
+    });
+
+    client.on('error', (err) => {
+      console.error('Erro de conexão com a impressora:', err);
+      res.status(500).json({ 
+        error: 'Falha ao conectar na impressora',
+        details: err.message 
+      });
+    });
+
+  } catch (err) {
+    console.error('Erro no servidor:', err);
+    res.status(500).json({ 
+      error: 'Erro interno no servidor',
+      details: err instanceof Error ? err.message : String(err)
+    });
+  }
+});
+
+
+
+
+// Endpoint para gerar ZPL
+app.get('/gerar-zpl', (req, res) => {
+  const { senha, tipo } = req.query;
+  
+  const zpl = `
+  ^XA
+  ^CF0,40
+  ^FO50,30^FDClinica Medica^FS
+  ^FO50,80^FDSenha: ${tipo}${String(senha).padStart(3, '0')}^FS
+  ^FO50,130^FDData: ${new Date().toLocaleDateString()}^FS
+  ^FO50,180^FDHora: ${new Date().toLocaleTimeString()}^FS
+  ^XZ
+  `;
+
+  res.set('Content-Type', 'text/plain');
+  res.send(zpl);
 });
 
 app.post('/chamar', (req: Request, res: Response) => {
@@ -394,7 +459,7 @@ app.use((err: any, req: Request, res: Response, next: any) => {
 });
 
 // Inicialização do servidor
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
