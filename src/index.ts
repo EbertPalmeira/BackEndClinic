@@ -5,7 +5,7 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import fs from 'fs';
 import dotenv from 'dotenv';
-
+const PRINTER_PATH = '/dev/usb/lp0';
 // Configuração de ambiente
 dotenv.config();
 
@@ -71,11 +71,7 @@ const state: Estado = {
 // Utilitários
 const gerarId = () => Math.random().toString(36).substring(2, 15);
 
-// Configuração da Impressora USB
-const PRINTER_PATH = process.env.PRINTER_PATH || 
-  (process.platform === 'win32' 
-    ? '\\\\?\\usb#vid_0a5f&pid_000a' // Caminho comum no Windows
-    : '/dev/usb/lp0'); // Caminho comum no Linux
+
 
 // Função para gerar ZPL
 const gerarZPL = (senha: string): string => {
@@ -303,31 +299,19 @@ app.post('/confirmar-exames', async (req: Request, res: Response) => {
 });
 
 // 6. Rota para Imprimir Senha (USB)
-app.post('/imprimir-senha', async (req: Request, res: Response) => {
+app.post('/imprimir-senha', async (req, res) => {
   try {
     const { senha } = req.body;
-
-    if (!senha) {
-      return res.status(400).json({ error: 'Parâmetro "senha" é obrigatório' });
-    }
-
-    const zpl = gerarZPL(senha);
-    await imprimirNaZebraUSB(zpl);
+    const zpl = `^XA^CF0,60^FO100,100^FD${senha}^FS^XZ`;
     
-    return res.json({ 
-      success: true, 
-      message: 'Senha enviada para impressora USB',
-      senha
-    });
-
+    fs.writeFileSync(PRINTER_PATH, zpl, 'binary');
+    res.json({ success: true });
+    
   } catch (error) {
-    console.error('Erro ao processar impressão:', error);
-    return res.status(500).json({ 
-      error: 'Erro interno ao processar requisição',
-      details: error instanceof Error ? error.message : 'Erro desconhecido'
-    });
+    res.status(500).json({ error: error.message });
   }
 });
+
 
 // Socket.IO (Original)
 io.on('connection', (socket) => {
