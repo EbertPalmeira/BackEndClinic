@@ -15,11 +15,14 @@
     "install": "^0.13.0",
     "net": "^1.0.2",
     "socket.io": "^4.8.1",
-    "teste": "file:"
+    "teste": "file:",
+    "usb": "^2.15.0"
   },
   "devDependencies": {
     "@types/dotenv": "^6.1.1",
+    "@types/express": "^5.0.1",
     "@types/node": "^20.11.19",
-    "typescript": "5.3.3"
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
   }
 }

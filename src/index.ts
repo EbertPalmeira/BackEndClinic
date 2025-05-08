@@ -3,7 +3,7 @@ import { Request, Response, NextFunction } from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
-import net from 'net';
+import fs from 'fs';
 import dotenv from 'dotenv';
 
 // Configuração de ambiente
@@ -71,11 +71,13 @@ const state: Estado = {
 // Utilitários
 const gerarId = () => Math.random().toString(36).substring(2, 15);
 
-// Configuração da Impressora
-const PRINTER_IP = process.env.PRINTER_IP || '192.168.1.100';
-const PRINTER_PORT = 9100;
+// Configuração da Impressora USB
+const PRINTER_PATH = process.env.PRINTER_PATH || 
+  (process.platform === 'win32' 
+    ? '\\\\?\\usb#vid_0a5f&pid_000a' // Caminho comum no Windows
+    : '/dev/usb/lp0'); // Caminho comum no Linux
 
-// Função para gerar ZPL (versão simplificada que já funcionou)
+// Função para gerar ZPL
 const gerarZPL = (senha: string): string => {
   return `^XA
 ^CF0,60
@@ -83,63 +85,30 @@ const gerarZPL = (senha: string): string => {
 ^XZ`;
 };
 
-// Função de impressão MELHORADA
-const imprimirNaZebra = async (zpl: string): Promise<boolean> => {
+// Função de impressão via USB
+const imprimirNaZebraUSB = async (zpl: string): Promise<boolean> => {
   return new Promise((resolve, reject) => {
-    if (!PRINTER_IP || PRINTER_IP === '0.0.0.0') {
-      console.log('Impressão simulada (nenhum IP configurado)');
-      return resolve(true);
-    }
-
-    const client = new net.Socket();
-    let resolved = false;
-
-    client.setTimeout(10000); // 10 segundos
-
-    client.connect(PRINTER_PORT, PRINTER_IP, () => {
-      console.log(`Conectado à impressora ${PRINTER_IP}:${PRINTER_PORT}`);
-      
-      client.write(zpl, 'ascii', (err) => {
-        if (err && !resolved) {
-          resolved = true;
-          reject(err);
-        } else if (!resolved) {
-          resolved = true;
-          resolve(true);
-        }
-        client.destroy();
-      });
-    });
-
-    client.on('error', (err) => {
-      console.error('Erro de conexão:', err);
-      if (!resolved) {
-        resolved = true;
+    fs.writeFile(PRINTER_PATH, zpl, 'binary', (err) => {
+      if (err) {
+        console.error('Erro ao imprimir:', err);
         reject(err);
+      } else {
+        console.log('Senha impressa com sucesso via USB');
+        resolve(true);
       }
-      client.destroy();
-    });
-
-    client.on('timeout', () => {
-      console.error('Timeout de conexão');
-      if (!resolved) {
-        resolved = true;
-        reject(new Error('Timeout de conexão com a impressora'));
-      }
-      client.destroy();
     });
   });
 };
 
 // ======================================
-// ROTAS PRINCIPAIS (TODAS MANTIDAS)
+// ROTAS PRINCIPAIS
 // ======================================
 
 // 1. Rota de teste de impressora
 app.get('/teste-impressora', async (req: Request, res: Response) => {
   try {
     const zpl = gerarZPL('TESTE');
-    const resultado = await imprimirNaZebra(zpl);
+    const resultado = await imprimirNaZebraUSB(zpl);
     
     res.json({
       success: resultado,
@@ -172,7 +141,7 @@ app.post('/gerar', async (req: Request, res: Response) => {
     // Tenta imprimir automaticamente
     try {
       const zpl = gerarZPL(novaSenha);
-      await imprimirNaZebra(zpl);
+      await imprimirNaZebraUSB(zpl);
     } catch (err) {
       console.error('Erro ao imprimir (não crítico):', err);
     }
@@ -333,8 +302,7 @@ app.post('/confirmar-exames', async (req: Request, res: Response) => {
   }
 });
 
-// 6. Rota para Imprimir Senha (Alternativa)
-// Rota para Imprimir Senha - Versão garantida
+// 6. Rota para Imprimir Senha (USB)
 app.post('/imprimir-senha', async (req: Request, res: Response) => {
   try {
     const { senha } = req.body;
@@ -343,44 +311,13 @@ app.post('/imprimir-senha', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Parâmetro "senha" é obrigatório' });
     }
 
-    const zpl = `^XA
-^CF0,60
-^FO100,100^FD${senha}^FS
-^XZ`;
-
-    console.log(`Tentando imprimir: ${senha}`);
+    const zpl = gerarZPL(senha);
+    await imprimirNaZebraUSB(zpl);
     
-    // Simulação se não houver IP de impressora configurado
-    if (!process.env.PRINTER_IP || process.env.PRINTER_IP === '0.0.0.0') {
-      console.log('Impressão simulada (nenhum IP configurado)');
-      return res.json({ 
-        success: true, 
-        message: 'Impressão simulada com sucesso (nenhuma impressora configurada)',
-        senha
-      });
-    }
-
-    // Implementação real da impressão
-    const client = new net.Socket();
-    client.connect(9100, process.env.PRINTER_IP, () => {
-      client.write(zpl, 'ascii', () => {
-        client.destroy();
-        return res.json({ 
-          success: true, 
-          message: 'Senha enviada para impressora',
-          senha
-        });
-      });
-    });
-
-    client.on('error', (err) => {
-      console.error('Erro de impressão:', err);
-      client.destroy();
-      return res.status(500).json({ 
-        success: false,
-        message: 'Falha ao comunicar com impressora',
-        error: err.message
-      });
+    return res.json({ 
+      success: true, 
+      message: 'Senha enviada para impressora USB',
+      senha
     });
 
   } catch (error) {
@@ -423,6 +360,6 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
-  console.log(`Configuração de impressora: ${PRINTER_IP || 'Desabilitada'}`);
+  console.log(`Configuração de impressora USB: ${PRINTER_PATH}`);
   console.log(`Teste de impressora disponível em: http://localhost:${PORT}/teste-impressora`);
 });
