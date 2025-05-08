@@ -9,19 +9,24 @@
     "dev": "nodemon --exec ts-node src/index.ts"
   },
   "dependencies": {
-    "cors": "2.8.5",
+    "body-parser": "^2.2.0",
+    "cors": "^2.8.5",
     "dotenv": "^16.5.0",
     "express": "^4.21.2",
     "install": "^0.13.0",
     "net": "^1.0.2",
     "socket.io": "^4.8.1",
+    "sqlite3": "^5.1.7",
     "teste": "file:",
     "usb": "^2.15.0"
   },
   "devDependencies": {
+    "@types/body-parser": "^1.19.5",
+    "@types/cors": "^2.8.18",
     "@types/dotenv": "^6.1.1",
     "@types/express": "^5.0.1",
-    "@types/node": "^20.11.19",
+    "@types/node": "^20.17.45",
+    "@types/sqlite3": "^3.1.11",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3"
   }
