@@ -299,15 +299,13 @@ app.post('/confirmar-exames', async (req: Request, res: Response) => {
 });
 
 // 6. Rota para Imprimir Senha (USB)
-app.post('/imprimir-senha', async (req, res) => {
+// Adicione esta rota no seu backend (server.js)
+app.post('/imprimir-local', (req, res) => {
   try {
-    const { senha } = req.body;
-    const zpl = `^XA^CF0,60^FO100,100^FD${senha}^FS^XZ`;
-    
-    fs.writeFileSync(PRINTER_PATH, zpl, 'binary');
+    const { zpl } = req.body;
+    fs.writeFileSync(PRINTER_PATH, zpl);
     res.json({ success: true });
-    
-  } catch (error) {
+  } catch (error:any) {
     res.status(500).json({ error: error.message });
   }
 });
