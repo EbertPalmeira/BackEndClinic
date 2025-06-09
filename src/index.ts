@@ -1,4 +1,4 @@
-import express, { Request, Response, NextFunction, Application, Router } from 'express';
+import express, { Request, Response, NextFunction, Application } from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
@@ -19,7 +19,6 @@ const io = new Server(server, {
   transports: ['websocket', 'polling']
 });
 
-const router = express.Router(); 
 
 app.use(cors({
   origin: ['http://localhost:8080', 'https://seu-frontend.com'],
@@ -75,7 +74,7 @@ const gerarId = (): string => Math.random().toString(36).substring(2, 15);
 // ==== ROTAS ====
 
 // Gerar senha
-router.post('/gerar', (req: Request, res: Response) => {
+app.post('/gerar', (req: Request, res: Response) => {
   const { tipo } = req.body;
 
   if (!tipo || !['O', 'L'].includes(tipo)) {
@@ -91,7 +90,7 @@ router.post('/gerar', (req: Request, res: Response) => {
 });
 
 // Chamar senha
-router.post('/chamar', (req: Request, res: Response) => {
+app.post('/chamar', (req: Request, res: Response) => {
   const { guiche, senha } = req.body;
 
   if (!guiche || typeof guiche !== 'number' || guiche < 1 || guiche > 3) {
@@ -154,28 +153,45 @@ setInterval(saveState, 30000); // Salva a cada 30 segundos
 });
 
 // Finalizar atendimento
-router.post('/finalizar-atendimento', (req: Request, res: Response) => {
-  const { senha } = req.body;
-  const chamada = state.senhasChamadas.find(s => s.senha === senha);
-  if (!chamada) return res.status(404).json({ error: 'Senha não encontrada' });
+app.post('/finalizar-exame', (req: Request, res: Response) => {
+  console.log('Requisição recebida em /finalizar-exame', req.body); // Log de depuração
+  
+  const { id, exame } = req.body;
+  if (!id || !exame) {
+    console.log('Dados incompletos:', { id, exame });
+    return res.status(400).json({ error: 'Dados incompletos' });
+  }
 
-  chamada.finalizado = true;
-  chamada.atendido = true;
-  chamada.emAtendimento = false;
+  const chamada = state.senhasChamadas.find(s => s.id === id);
+  if (!chamada) {
+    console.log('Chamada não encontrada para ID:', id);
+    return res.status(404).json({ error: 'Chamada não encontrada' });
+  }
+
+  console.log('Chamada encontrada:', chamada.senha);
+  
+  chamada.examesConcluidos = chamada.examesConcluidos || [];
+  if (!chamada.examesConcluidos.includes(exame)) {
+    chamada.examesConcluidos.push(exame);
+  }
+
   chamada.exameAtual = null;
+  chamada.emAtendimento = false;
 
-  io.emit('senha-finalizada', { id: chamada.id });
-  io.emit('atualizacao-atendimento', {
+  console.log('Exame finalizado. Estado atual:', chamada);
+
+  io.emit('atualizar-senha-consultorio', {
     id: chamada.id,
+    examesConcluidos: chamada.examesConcluidos,
     emAtendimento: false,
     exameAtual: null
   });
 
-  res.json({ sucesso: true });
+  return res.json({ sucesso: true });
 });
 
 // Marcar como em atendimento
-router.post('/marcar-em-atendimento', (req: Request, res: Response) => {
+app.post('/marcar-em-atendimento', (req: Request, res: Response) => {
   const { id, emAtendimento, exameAtual } = req.body;
   const chamada = state.senhasChamadas.find(s => s.id === id);
   if (!chamada) return res.status(404).json({ error: 'Chamada não encontrada' });
@@ -193,7 +209,7 @@ router.post('/marcar-em-atendimento', (req: Request, res: Response) => {
 });
 
 // Confirmar exames
-router.post('/confirmar-exames', (req: Request, res: Response) => {
+app.post('/confirmar-exames', (req: Request, res: Response) => {
   const { senha, guiche, exames, action, id }: ExamePayload = req.body;
 
   if (!senha || !guiche || !Array.isArray(exames)) {
@@ -229,7 +245,7 @@ router.post('/confirmar-exames', (req: Request, res: Response) => {
 });
 
 // Finalizar exame
-router.post('/finalizar-exame', (req: Request, res: Response) => {
+app.post('/finalizar-exame', (req: Request, res: Response) => {
   const { id, exame } = req.body;
   const chamada = state.senhasChamadas.find(s => s.id === id);
   if (!chamada) return res.status(404).json({ error: 'Chamada não encontrada' });
@@ -267,7 +283,7 @@ io.on('connection', socket => {
 });
 
 // ==== Middleware e Inicialização ====
-app.use('/api', router);
+
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Endpoint não encontrado' });
