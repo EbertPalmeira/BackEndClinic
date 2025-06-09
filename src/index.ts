@@ -1,29 +1,16 @@
-import express, { Request, Response, NextFunction } from 'express';
+import express, { Request, Response, NextFunction, Application, Router } from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import fs from 'fs';
 
-dotenv.config(); // Carrega variáveis do .env
+dotenv.config();
 
 const PRINTER_PATH = process.env.PRINTER_PATH || 'NÃO DEFINIDO';
+const PORT = process.env.PORT || 3001;
 
-const app = express();
+const app: Application = express();
 const server = createServer(app);
-const router = express.Router();
-
-// Configuração CORS
-app.use(cors({
-  origin: ['http://localhost:8080', 'https://seu-frontend.com'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type'],
-  credentials: true
-}));
-
-app.use(express.json());
-
-// Configuração do Socket.IO
 const io = new Server(server, {
   cors: {
     origin: ['http://localhost:8080', 'https://seu-frontend.com'],
@@ -32,7 +19,19 @@ const io = new Server(server, {
   transports: ['websocket', 'polling']
 });
 
-// Tipos e Estado
+const router = express.Router(); 
+
+app.use(cors({
+  origin: ['http://localhost:8080', 'https://seu-frontend.com'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type'],
+  credentials: true
+}));
+
+
+app.use(express.json());
+
+// ==== Tipos ====
 type TipoSenha = 'O' | 'L';
 
 interface Chamada {
@@ -46,6 +45,8 @@ interface Chamada {
   atendido?: boolean;
   emAtendimento?: boolean;
   exameAtual?: string | null;
+  examesOriginais?: string[];
+  examesConcluidos?: string[];
 }
 
 interface Estado {
@@ -62,42 +63,34 @@ interface ExamePayload {
   id?: string;
 }
 
+// ==== Estado do sistema ====
 const state: Estado = {
   filaSenhas: { O: [], L: [] },
   senhasChamadas: [],
   contadores: { O: 0, L: 0 }
 };
 
-const gerarId = () => Math.random().toString(36).substring(2, 15);
+const gerarId = (): string => Math.random().toString(36).substring(2, 15);
 
-// ===== ROTAS =====
+// ==== ROTAS ====
 
-// Gerar Senha
-router.post('/gerar', async (req: Request, res: Response) => {
-  try {
-    const { tipo } = req.body;
+// Gerar senha
+router.post('/gerar', (req: Request, res: Response) => {
+  const { tipo } = req.body;
 
-    if (!tipo || !['O', 'L'].includes(tipo)) {
-      return res.status(400).json({ error: 'Tipo inválido. Use "O" ou "L".' });
-    }
-
-    state.contadores[tipo as TipoSenha] += 1;
-    const novaSenha = `${tipo}${String(state.contadores[tipo as TipoSenha]).padStart(3, '0')}`;
-    state.filaSenhas[tipo as TipoSenha].push(novaSenha);
-
-    return res.json({
-      senha: novaSenha,
-      numero: state.contadores[tipo as TipoSenha],
-      tipo
-    });
-
-  } catch (error) {
-    console.error('Erro em /gerar:', error);
-    return res.status(500).json({ error: 'Erro interno ao gerar senha' });
+  if (!tipo || !['O', 'L'].includes(tipo)) {
+    return res.status(400).json({ error: 'Tipo inválido. Use "O" ou "L".' });
   }
+
+  const tipoSenha = tipo as TipoSenha;
+  state.contadores[tipoSenha]++;
+  const novaSenha = `${tipo}${String(state.contadores[tipoSenha]).padStart(3, '0')}`;
+  state.filaSenhas[tipoSenha].push(novaSenha);
+
+  return res.json({ senha: novaSenha, numero: state.contadores[tipoSenha], tipo });
 });
 
-// Chamar Senha
+// Chamar senha
 router.post('/chamar', (req: Request, res: Response) => {
   const { guiche, senha } = req.body;
 
@@ -113,7 +106,6 @@ router.post('/chamar', (req: Request, res: Response) => {
   if (tipoSenha === 'L' && guiche !== 3) return res.status(400).json({ error: 'Senha laboratorial só vai ao guichê 3' });
 
   const senhaChamada = state.filaSenhas[tipoSenha].splice(senhaIndex, 1)[0];
-
   const chamada: Chamada = {
     id: gerarId(),
     senha: senhaChamada,
@@ -123,8 +115,31 @@ router.post('/chamar', (req: Request, res: Response) => {
     finalizado: false,
     atendido: false,
     emAtendimento: false,
-    exameAtual: null
+    exameAtual: null,
+    examesOriginais: [],
+    examesConcluidos: []
   };
+
+  // Adicione no início, após as interfaces
+const fs = require('fs');
+const DB_FILE = 'database.json';
+
+// Funções para persistência
+const saveState = () => {
+  fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2));
+};
+
+const loadState = () => {
+  if (fs.existsSync(DB_FILE)) {
+    Object.assign(state, JSON.parse(fs.readFileSync(DB_FILE, 'utf8')));
+  }
+};
+
+// Carregar estado ao iniciar
+loadState();
+
+// Salvar estado periodicamente
+setInterval(saveState, 30000); // Salva a cada 30 segundos
 
   state.senhasChamadas.push(chamada);
 
@@ -138,7 +153,7 @@ router.post('/chamar', (req: Request, res: Response) => {
   res.json(chamada);
 });
 
-// Finalizar Atendimento
+// Finalizar atendimento
 router.post('/finalizar-atendimento', (req: Request, res: Response) => {
   const { senha } = req.body;
   const chamada = state.senhasChamadas.find(s => s.senha === senha);
@@ -161,65 +176,84 @@ router.post('/finalizar-atendimento', (req: Request, res: Response) => {
 
 // Marcar como em atendimento
 router.post('/marcar-em-atendimento', (req: Request, res: Response) => {
-  const { id } = req.body;
+  const { id, emAtendimento, exameAtual } = req.body;
   const chamada = state.senhasChamadas.find(s => s.id === id);
   if (!chamada) return res.status(404).json({ error: 'Chamada não encontrada' });
 
-  chamada.emAtendimento = false;
-  chamada.exameAtual = null;
+  chamada.emAtendimento = !!emAtendimento;
+  chamada.exameAtual = exameAtual || null;
 
   io.emit('atualizacao-atendimento', {
     id: chamada.id,
-    emAtendimento: false,
-    exameAtual: null,
+    emAtendimento: chamada.emAtendimento,
+    exameAtual: chamada.exameAtual
   });
 
   return res.json({ sucesso: true, chamada });
 });
 
 // Confirmar exames
-router.post('/confirmar-exames', async (req: Request, res: Response) => {
-  try {
-    const { senha, guiche, exames, action, id }: ExamePayload = req.body;
+router.post('/confirmar-exames', (req: Request, res: Response) => {
+  const { senha, guiche, exames, action, id }: ExamePayload = req.body;
 
-    if (!senha || !guiche || !Array.isArray(exames)) {
-      return res.status(400).json({ sucesso: false, mensagem: 'Dados inválidos' });
-    }
-
-    if (action === 'editar' && !id) {
-      return res.status(400).json({ sucesso: false, mensagem: 'ID é obrigatório para editar' });
-    }
-
-    let chamada = state.senhasChamadas.find(s => 
-      action === 'editar' ? s.id === id : s.senha === senha && s.guiche === guiche
-    );
-
-    if (!chamada) return res.status(404).json({ sucesso: false, mensagem: 'Senha não encontrada' });
-
-    chamada.exames = [...new Set(exames)];
-
-    if (action === 'confirmar') {
-      chamada.encaminhadoConsultorio = true;
-      chamada.emAtendimento = true;
-      chamada.exameAtual = chamada.exames[0] || null;
-
-      io.emit('atualizacao-atendimento', {
-        id: chamada.id,
-        emAtendimento: true,
-        exameAtual: chamada.exameAtual
-      });
-    }
-
-    return res.json({ sucesso: true, chamada });
-
-  } catch (error) {
-    console.error('Erro em confirmar-exames:', error);
-    res.status(500).json({ sucesso: false, mensagem: 'Erro interno' });
+  if (!senha || !guiche || !Array.isArray(exames)) {
+    return res.status(400).json({ sucesso: false, mensagem: 'Dados inválidos' });
   }
+
+  if (action === 'editar' && !id) {
+    return res.status(400).json({ sucesso: false, mensagem: 'ID é obrigatório para editar' });
+  }
+
+  const chamada = state.senhasChamadas.find(s =>
+    action === 'editar' ? s.id === id : s.senha === senha && s.guiche === guiche
+  );
+  if (!chamada) return res.status(404).json({ sucesso: false, mensagem: 'Senha não encontrada' });
+
+  chamada.exames = [...new Set(exames)];
+  chamada.examesOriginais = chamada.examesOriginais || [...exames];
+  chamada.examesConcluidos = chamada.examesConcluidos || [];
+
+  if (action === 'confirmar') {
+    chamada.encaminhadoConsultorio = true;
+    chamada.emAtendimento = true;
+    chamada.exameAtual = chamada.exames[0] || null;
+
+    io.emit('atualizacao-atendimento', {
+      id: chamada.id,
+      emAtendimento: true,
+      exameAtual: chamada.exameAtual
+    });
+  }
+
+  return res.json({ sucesso: true, chamada });
 });
 
-// ===== Socket.IO =====
-io.on('connection', (socket) => {
+// Finalizar exame
+router.post('/finalizar-exame', (req: Request, res: Response) => {
+  const { id, exame } = req.body;
+  const chamada = state.senhasChamadas.find(s => s.id === id);
+  if (!chamada) return res.status(404).json({ error: 'Chamada não encontrada' });
+
+  chamada.examesConcluidos = chamada.examesConcluidos || [];
+  if (!chamada.examesConcluidos.includes(exame)) {
+    chamada.examesConcluidos.push(exame);
+  }
+
+  chamada.exameAtual = null;
+  chamada.emAtendimento = false;
+
+  io.emit('atualizar-senha-consultorio', {
+    id: chamada.id,
+    examesConcluidos: chamada.examesConcluidos,
+    emAtendimento: false,
+    exameAtual: null
+  });
+
+  return res.json({ sucesso: true });
+});
+
+// ==== Socket.IO ====
+io.on('connection', socket => {
   console.log('Cliente conectado');
 
   socket.emit('estado-inicial', {
@@ -232,10 +266,10 @@ io.on('connection', (socket) => {
   });
 });
 
-// ===== Middleware e Inicialização =====
+// ==== Middleware e Inicialização ====
 app.use('/api', router);
 
-app.use((req: Request, res: Response) => {
+app.use((req, res) => {
   res.status(404).json({ error: 'Endpoint não encontrado' });
 });
 
@@ -244,7 +278,6 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   res.status(500).json({ error: 'Erro interno do servidor' });
 });
 
-const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
   console.log(`Configuração de impressora USB: ${PRINTER_PATH}`);
