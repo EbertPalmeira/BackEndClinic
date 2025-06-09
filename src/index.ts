@@ -245,28 +245,7 @@ app.post('/confirmar-exames', (req: Request, res: Response) => {
 });
 
 // Finalizar exame
-app.post('/finalizar-exame', (req: Request, res: Response) => {
-  const { id, exame } = req.body;
-  const chamada = state.senhasChamadas.find(s => s.id === id);
-  if (!chamada) return res.status(404).json({ error: 'Chamada não encontrada' });
 
-  chamada.examesConcluidos = chamada.examesConcluidos || [];
-  if (!chamada.examesConcluidos.includes(exame)) {
-    chamada.examesConcluidos.push(exame);
-  }
-
-  chamada.exameAtual = null;
-  chamada.emAtendimento = false;
-
-  io.emit('atualizar-senha-consultorio', {
-    id: chamada.id,
-    examesConcluidos: chamada.examesConcluidos,
-    emAtendimento: false,
-    exameAtual: null
-  });
-
-  return res.json({ sucesso: true });
-});
 
 // ==== Socket.IO ====
 io.on('connection', socket => {
