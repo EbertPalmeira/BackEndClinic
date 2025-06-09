@@ -5,7 +5,7 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import fs from 'fs';
 import dotenv from 'dotenv';
-const PRINTER_PATH = '/dev/usb/lp0';
+
 // Configuração de ambiente
 dotenv.config();
 
@@ -73,54 +73,6 @@ const gerarId = () => Math.random().toString(36).substring(2, 15);
 
 
 
-// Função para gerar ZPL
-const gerarZPL = (senha: string): string => {
-  return `^XA
-^CF0,60
-^FO100,100^FD${senha}^FS
-^XZ`;
-};
-
-// Função de impressão via USB
-const imprimirNaZebraUSB = async (zpl: string): Promise<boolean> => {
-  return new Promise((resolve, reject) => {
-    fs.writeFile(PRINTER_PATH, zpl, 'binary', (err) => {
-      if (err) {
-        console.error('Erro ao imprimir:', err);
-        reject(err);
-      } else {
-        console.log('Senha impressa com sucesso via USB');
-        resolve(true);
-      }
-    });
-  });
-};
-
-// ======================================
-// ROTAS PRINCIPAIS
-// ======================================
-
-// 1. Rota de teste de impressora
-app.get('/teste-impressora', async (req: Request, res: Response) => {
-  try {
-    const zpl = gerarZPL('TESTE');
-    const resultado = await imprimirNaZebraUSB(zpl);
-    
-    res.json({
-      success: resultado,
-      message: resultado ? 
-        'Teste enviado para impressora com sucesso' : 
-        'Falha ao enviar teste para impressora'
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Erro ao testar impressora',
-      error: error instanceof Error ? error.message : String(error)
-    });
-  }
-});
-
 // 2. Gerar Senha (Original + impressão)
 app.post('/gerar', async (req: Request, res: Response) => {
   try {
@@ -134,26 +86,14 @@ app.post('/gerar', async (req: Request, res: Response) => {
     const novaSenha = `${tipo}${String(state.contadores[tipo as TipoSenha]).padStart(3, '0')}`;
     state.filaSenhas[tipo as TipoSenha].push(novaSenha);
 
-    // Tenta imprimir automaticamente
-    try {
-      const zpl = gerarZPL(novaSenha);
-      await imprimirNaZebraUSB(zpl);
-    } catch (err) {
-      console.error('Erro ao imprimir (não crítico):', err);
-    }
-
-    io.emit('nova-senha', {
-      senha: novaSenha,
-      tipo,
-      numero: state.contadores[tipo as TipoSenha],
-      posicao: state.filaSenhas[tipo as TipoSenha].length
-    });
-
+    // Retorna a senha sem tentar imprimir
     return res.json({ 
       senha: novaSenha, 
       numero: state.contadores[tipo as TipoSenha], 
       tipo 
     });
+    
+  
   } catch (error) {
     console.error('Erro em /gerar:', error);
     return res.status(500).json({ 
@@ -242,6 +182,26 @@ app.post('/finalizar-atendimento', (req: Request, res: Response) => {
   
   res.json({ sucesso: true });
 });
+app.post('/marcar-em-atendimento', (req: Request, res: Response) => {
+  const { id, exameAtual } = req.body;
+
+  const chamada = state.senhasChamadas.find(s => s.id === id);
+  if (!chamada) {
+    return res.status(404).json({ error: 'Paciente não encontrado' });
+  }
+
+  chamada.emAtendimento = false;
+  chamada.exameAtual = null;
+
+  // Emitir atualização
+  io.emit('atualizacao-atendimento', {
+    id: chamada.id,
+    emAtendimento: false,
+    exameAtual: null,
+  });
+
+  return res.json({ sucesso: true, chamada });
+});
 
 // 5. Rotas para Consultório (Original)
 app.post('/confirmar-exames', async (req: Request, res: Response) => {
@@ -298,17 +258,7 @@ app.post('/confirmar-exames', async (req: Request, res: Response) => {
   }
 });
 
-// 6. Rota para Imprimir Senha (USB)
-// Adicione esta rota no seu backend (server.js)
-app.post('/imprimir-local', (req, res) => {
-  try {
-    const { zpl } = req.body;
-    fs.writeFileSync(PRINTER_PATH, zpl);
-    res.json({ success: true });
-  } catch (error:any) {
-    res.status(500).json({ error: error.message });
-  }
-});
+
 
 
 // Socket.IO (Original)
