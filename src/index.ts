@@ -143,6 +143,7 @@ app.post('/chamar', (req: Request, res: Response) => {
   res.json(chamada);
 });
 
+
 app.post('/finalizar-exame', (req: Request, res: Response) => {
    console.log('Requisição recebida em /finalizar-exame', req.body); 
   const { id, exame } = req.body;
@@ -229,6 +230,99 @@ app.post('/confirmar-exames', (req: Request, res: Response) => {
   }
 
   return res.json({ sucesso: true, chamada });
+});
+// Adicione estas rotas antes do middleware de 404
+
+// Rota para obter senhas de exames chamadas
+app.get('/senhas-chamadas-exames', (req: Request, res: Response) => {
+  try {
+    const senhasExames = state.senhasChamadas.filter(chamada => {
+      return chamada.senha.startsWith('O') && chamada.encaminhadoConsultorio;
+    });
+    
+    res.status(200).json({
+      success: true,
+      data: senhasExames
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao buscar senhas de exames'
+    });
+  }
+});
+
+// Rota para obter senhas de consultório
+app.get('/senhas-consultorio', (req: Request, res: Response) => {
+  try {
+    const { apenasNaoAtendidos } = req.query;
+    
+    let senhasFiltradas = state.senhasChamadas.filter(chamada => {
+      return chamada.senha.startsWith('L') || chamada.encaminhadoConsultorio;
+    });
+    
+    if (apenasNaoAtendidos === 'true') {
+      senhasFiltradas = senhasFiltradas.filter(chamada => !chamada.atendido);
+    }
+    
+    res.status(200).json({
+      success: true,
+      data: senhasFiltradas
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao buscar senhas de consultório'
+    });
+  }
+});
+
+// Rota para marcar senha como atendida no consultório
+app.post('/senhas-consultorio/marcar-atendido', (req: Request, res: Response) => {
+  try {
+    const { id } = req.body;
+    
+    const chamada = state.senhasChamadas.find(s => s.id === id);
+    if (!chamada) {
+      return res.status(404).json({ success: false, message: 'Senha não encontrada' });
+    }
+    
+    chamada.atendido = true;
+    chamada.finalizado = true;
+    
+    io.emit('senha-atendida-consultorio', { id });
+    
+    res.status(200).json({
+      success: true,
+      data: chamada
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao marcar senha como atendida'
+    });
+  }
+});
+
+// Adicione esta rota se precisar de uma específica para exames não atendidos
+app.get('/senhas-exames-nao-atendidos', (req: Request, res: Response) => {
+  try {
+    const senhas = state.senhasChamadas.filter(chamada => {
+      return chamada.senha.startsWith('O') && 
+             chamada.encaminhadoConsultorio && 
+             !chamada.atendido;
+    });
+    
+    res.status(200).json({
+      success: true,
+      data: senhas
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao buscar senhas de exames não atendidos'
+    });
+  }
 });
 
 // ==== Socket.IO ====
