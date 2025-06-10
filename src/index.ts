@@ -16,14 +16,14 @@ const app = express();
 const server = createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: ['http://localhost:8080', 'https://seu-frontend.com'],
+    origin: ['http://localhost:8080', 'https://clinicshalom.netlify.app/'],
     methods: ['GET', 'POST']
   },
   transports: ['websocket', 'polling']
 });
 
 app.use(cors({
-  origin: ['http://localhost:8080', 'https://seu-frontend.com'],
+  origin: ['http://localhost:8080', 'https://clinicshalom.netlify.app/'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], 
   allowedHeaders: ['Content-Type'],
   credentials: true
@@ -73,20 +73,17 @@ const state: Estado = {
 const gerarId = (): string => Math.random().toString(36).substring(2, 15);
 
 // Persistência
+// Verifique se o arquivo database.json está sendo criado
 const DB_FILE = 'database.json';
 
 const saveState = () => {
-  fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2));
-};
-
-const loadState = () => {
-  if (fs.existsSync(DB_FILE)) {
-    Object.assign(state, JSON.parse(fs.readFileSync(DB_FILE, 'utf8')));
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2));
+    console.log("Estado salvo com sucesso");
+  } catch (error) {
+    console.error("Erro ao salvar estado:", error);
   }
 };
-
-loadState();
-setInterval(saveState, 30000); // Salva a cada 30 segundos
 
 // ==== ROTAS ====
 
@@ -190,6 +187,13 @@ app.post('/marcar-em-atendimento', (req: Request, res: Response) => {
   });
 
   return res.json({ sucesso: true, chamada });
+});
+app.get('/estado', (req: Request, res: Response) => {
+  res.json({
+    fila: state.filaSenhas,
+    chamadas: state.senhasChamadas,
+    contadores: state.contadores
+  });
 });
 
 app.post('/confirmar-exames', (req: Request, res: Response) => {
