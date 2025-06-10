@@ -1,15 +1,17 @@
-import express, { Request, Response, NextFunction, Application } from 'express';
+import express from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import fs from 'fs';
 
 dotenv.config();
 
 const PRINTER_PATH = process.env.PRINTER_PATH || 'NÃO DEFINIDO';
 const PORT = process.env.PORT || 3001;
 
-const app: Application = express();
+const app = express();
 const server = createServer(app);
 const io = new Server(server, {
   cors: {
@@ -19,14 +21,12 @@ const io = new Server(server, {
   transports: ['websocket', 'polling']
 });
 
-
 app.use(cors({
   origin: ['http://localhost:8080', 'https://seu-frontend.com'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], 
   allowedHeaders: ['Content-Type'],
   credentials: true
 }));
-
 
 app.use(express.json());
 
@@ -71,9 +71,24 @@ const state: Estado = {
 
 const gerarId = (): string => Math.random().toString(36).substring(2, 15);
 
+// Persistência
+const DB_FILE = 'database.json';
+
+const saveState = () => {
+  fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2));
+};
+
+const loadState = () => {
+  if (fs.existsSync(DB_FILE)) {
+    Object.assign(state, JSON.parse(fs.readFileSync(DB_FILE, 'utf8')));
+  }
+};
+
+loadState();
+setInterval(saveState, 30000); // Salva a cada 30 segundos
+
 // ==== ROTAS ====
 
-// Gerar senha
 app.post('/gerar', (req: Request, res: Response) => {
   const { tipo } = req.body;
 
@@ -89,7 +104,6 @@ app.post('/gerar', (req: Request, res: Response) => {
   return res.json({ senha: novaSenha, numero: state.contadores[tipoSenha], tipo });
 });
 
-// Chamar senha
 app.post('/chamar', (req: Request, res: Response) => {
   const { guiche, senha } = req.body;
 
@@ -119,27 +133,6 @@ app.post('/chamar', (req: Request, res: Response) => {
     examesConcluidos: []
   };
 
-  // Adicione no início, após as interfaces
-const fs = require('fs');
-const DB_FILE = 'database.json';
-
-// Funções para persistência
-const saveState = () => {
-  fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2));
-};
-
-const loadState = () => {
-  if (fs.existsSync(DB_FILE)) {
-    Object.assign(state, JSON.parse(fs.readFileSync(DB_FILE, 'utf8')));
-  }
-};
-
-// Carregar estado ao iniciar
-loadState();
-
-// Salvar estado periodicamente
-setInterval(saveState, 30000); // Salva a cada 30 segundos
-
   state.senhasChamadas.push(chamada);
 
   io.emit('senha-chamada', chamada);
@@ -152,24 +145,17 @@ setInterval(saveState, 30000); // Salva a cada 30 segundos
   res.json(chamada);
 });
 
-// Finalizar atendimento
 app.post('/finalizar-exame', (req: Request, res: Response) => {
-  console.log('Requisição recebida em /finalizar-exame', req.body); // Log de depuração
-  
+   console.log('Requisição recebida em /finalizar-exame', req.body); 
   const { id, exame } = req.body;
   if (!id || !exame) {
-    console.log('Dados incompletos:', { id, exame });
+     console.log('Dados incompletos:', { id, exame });
     return res.status(400).json({ error: 'Dados incompletos' });
   }
 
   const chamada = state.senhasChamadas.find(s => s.id === id);
-  if (!chamada) {
-    console.log('Chamada não encontrada para ID:', id);
-    return res.status(404).json({ error: 'Chamada não encontrada' });
-  }
+  if (!chamada) return res.status(404).json({ error: 'Chamada não encontrada' });
 
-  console.log('Chamada encontrada:', chamada.senha);
-  
   chamada.examesConcluidos = chamada.examesConcluidos || [];
   if (!chamada.examesConcluidos.includes(exame)) {
     chamada.examesConcluidos.push(exame);
@@ -177,8 +163,6 @@ app.post('/finalizar-exame', (req: Request, res: Response) => {
 
   chamada.exameAtual = null;
   chamada.emAtendimento = false;
-
-  console.log('Exame finalizado. Estado atual:', chamada);
 
   io.emit('atualizar-senha-consultorio', {
     id: chamada.id,
@@ -190,7 +174,6 @@ app.post('/finalizar-exame', (req: Request, res: Response) => {
   return res.json({ sucesso: true });
 });
 
-// Marcar como em atendimento
 app.post('/marcar-em-atendimento', (req: Request, res: Response) => {
   const { id, emAtendimento, exameAtual } = req.body;
   const chamada = state.senhasChamadas.find(s => s.id === id);
@@ -208,7 +191,6 @@ app.post('/marcar-em-atendimento', (req: Request, res: Response) => {
   return res.json({ sucesso: true, chamada });
 });
 
-// Confirmar exames
 app.post('/confirmar-exames', (req: Request, res: Response) => {
   const { senha, guiche, exames, action, id }: ExamePayload = req.body;
 
@@ -244,9 +226,6 @@ app.post('/confirmar-exames', (req: Request, res: Response) => {
   return res.json({ sucesso: true, chamada });
 });
 
-// Finalizar exame
-
-
 // ==== Socket.IO ====
 io.on('connection', socket => {
   console.log('Cliente conectado');
@@ -261,9 +240,7 @@ io.on('connection', socket => {
   });
 });
 
-// ==== Middleware e Inicialização ====
-
-
+// ==== Middleware ====
 app.use((req, res) => {
   res.status(404).json({ error: 'Endpoint não encontrado' });
 });
@@ -273,6 +250,7 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   res.status(500).json({ error: 'Erro interno do servidor' });
 });
 
+// ==== Start Server ====
 server.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
   console.log(`Configuração de impressora USB: ${PRINTER_PATH}`);
