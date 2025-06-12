@@ -133,7 +133,10 @@ app.post('/chamar', (req: Request, res: Response) => {
 
   state.senhasChamadas.push(chamada);
 
-  io.emit('senha-chamada', chamada);
+  io.emit('senha-chamada', { 
+    ...chamada,
+    tipo: tipoSenha === 'O' ? 'ocupacional' : 'laboratorial'
+  });
   io.emit('atualizacao-fila', {
     fila: state.filaSenhas,
     ultimasChamadas: state.senhasChamadas.filter(s => !s.finalizado).slice(-5).reverse()
