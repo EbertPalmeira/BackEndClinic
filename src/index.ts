@@ -47,6 +47,7 @@ interface Chamada {
   exameAtual?: string | null;
   examesOriginais?: string[];
   examesConcluidos?: string[];
+  tipo: 'ocupacional' | 'laboratorial';
 }
 
 interface Estado {
@@ -139,7 +140,8 @@ app.post('/chamar', (req: Request, res: Response) => {
     finalizado: false,
     atendido: false,
     emAtendimento: false,
-    exameAtual: null
+    exameAtual: null,
+    tipo: tipoSenha === 'O' ? 'ocupacional' : 'laboratorial' 
   };
 
   state.senhasChamadas.push(chamada);
@@ -213,40 +215,82 @@ app.get('/estado', (req: Request, res: Response) => {
   });
 });
 
-app.post('/confirmar-exames', (req: Request, res: Response) => {
-  const { senha, guiche, exames, action, id }: ExamePayload = req.body;
+app.post('/chamar', (req: Request, res: Response) => {More actions
+  const { guiche, senha } = req.body;
 
-  if (!senha || !guiche || !Array.isArray(exames)) {
-    return res.status(400).json({ sucesso: false, mensagem: 'Dados inválidos' });
+  if (!guiche || typeof guiche !== 'number' || guiche < 1 || guiche > 3) {
+    return res.status(400).json({ error: 'Número do guichê inválido. Deve ser 1, 2 ou 3.' });
   }
 
-  if (action === 'editar' && !id) {
-    return res.status(400).json({ sucesso: false, mensagem: 'ID é obrigatório para editar' });
+  const tipoSenha = senha[0] as TipoSenha;
+
+  if (state.filaSenhas[tipoSenha].length === 0) {
+    return res.status(400).json({ error: 'Senha não encontrada na fila' });
   }
 
-  const chamada = state.senhasChamadas.find(s =>
-    action === 'editar' ? s.id === id : s.senha === senha && s.guiche === guiche
-  );
-  if (!chamada) return res.status(404).json({ sucesso: false, mensagem: 'Senha não encontrada' });
-
-  chamada.exames = [...new Set(exames)];
-  chamada.examesOriginais = chamada.examesOriginais || [...exames];
-  chamada.examesConcluidos = chamada.examesConcluidos || [];
-
-  if (action === 'confirmar') {
-    chamada.encaminhadoConsultorio = true;
-    chamada.emAtendimento = true;
-    chamada.exameAtual = chamada.exames[0] || null;
-
-    io.emit('atualizacao-atendimento', {
-      id: chamada.id,
-      emAtendimento: true,
-      exameAtual: chamada.exameAtual
-    });
-    io.emit('atualizar-senha-consultorio', chamada);
+  const senhaIndex = state.filaSenhas[tipoSenha].indexOf(senha);
+  if (senhaIndex === -1) {
+    return res.status(400).json({ error: 'Senha não encontrada na fila' });
   }
 
-  return res.json({ sucesso: true, chamada });
+  if (tipoSenha === 'O' && guiche === 3) {
+    return res.status(400).json({ error: 'Senha ocupacional não pode ser chamada no guichê 3' });
+  }
+
+  if (tipoSenha === 'L' && guiche !== 3) {
+    return res.status(400).json({ error: 'Senha laboratorial só pode ser chamada no guichê 3' });
+  }
+
+  const senhaChamada = state.filaSenhas[tipoSenha].splice(senhaIndex, 1)[0];
+
+  const chamada: Chamada = {
+    id: gerarId(),
+    senha: senhaChamada,
+    guiche,
+    timestamp: new Date(),
+    exames: [],
+    finalizado: false,
+    atendido: false,
+    emAtendimento: false,
+    exameAtual: null
+  };
+
+  state.senhasChamadas.push(chamada);
+
+  io.emit('senha-chamada', chamada);
+  io.emit('atualizacao-fila', {
+    fila: state.filaSenhas,
+    ultimasChamadas: state.senhasChamadas
+      .filter(s => !s.finalizado)
+      .slice(-5)
+      .reverse()
+  });
+  io.emit('senha-chamada-exames', { senha: senhaChamada, guiche });
+
+  res.json(chamada);
+});
+
+app.post('/finalizar-atendimento', (req: Request, res: Response) => {
+  const { senha } = req.body;
+
+  const chamada = state.senhasChamadas.find(s => s.senha === senha);
+  if (!chamada) {
+    return res.status(404).json({ error: 'Senha não encontrada' });
+  }
+
+  chamada.finalizado = true;
+  chamada.atendido = true;
+  chamada.emAtendimento = false;
+  chamada.exameAtual = null;
+
+  io.emit('senha-finalizada', { id: chamada.id });
+  io.emit('atualizacao-atendimento', {
+    id: chamada.id,
+    emAtendimento: false,
+    exameAtual: null
+  });
+
+  res.json({ sucesso: true });
 });
 // Adicione estas rotas antes do middleware de 404
 
