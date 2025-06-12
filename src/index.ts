@@ -106,17 +106,30 @@ app.post('/chamar', (req: Request, res: Response) => {
   const { guiche, senha } = req.body;
 
   if (!guiche || typeof guiche !== 'number' || guiche < 1 || guiche > 3) {
-    return res.status(400).json({ error: 'Guichê inválido' });
+    return res.status(400).json({ error: 'Número do guichê inválido. Deve ser 1, 2 ou 3.' });
   }
 
   const tipoSenha = senha[0] as TipoSenha;
-  const senhaIndex = state.filaSenhas[tipoSenha].indexOf(senha);
-  if (senhaIndex === -1) return res.status(400).json({ error: 'Senha não encontrada' });
 
-  if (tipoSenha === 'O' && guiche === 3) return res.status(400).json({ error: 'Senha ocupacional não pode ir ao guichê 3' });
-  if (tipoSenha === 'L' && guiche !== 3) return res.status(400).json({ error: 'Senha laboratorial só vai ao guichê 3' });
+  if (state.filaSenhas[tipoSenha].length === 0) {
+    return res.status(400).json({ error: 'Senha não encontrada na fila' });
+  }
+
+  const senhaIndex = state.filaSenhas[tipoSenha].indexOf(senha);
+  if (senhaIndex === -1) {
+    return res.status(400).json({ error: 'Senha não encontrada na fila' });
+  }
+
+  if (tipoSenha === 'O' && guiche === 3) {
+    return res.status(400).json({ error: 'Senha ocupacional não pode ser chamada no guichê 3' });
+  }
+
+  if (tipoSenha === 'L' && guiche !== 3) {
+    return res.status(400).json({ error: 'Senha laboratorial só pode ser chamada no guichê 3' });
+  }
 
   const senhaChamada = state.filaSenhas[tipoSenha].splice(senhaIndex, 1)[0];
+
   const chamada: Chamada = {
     id: gerarId(),
     senha: senhaChamada,
@@ -126,20 +139,18 @@ app.post('/chamar', (req: Request, res: Response) => {
     finalizado: false,
     atendido: false,
     emAtendimento: false,
-    exameAtual: null,
-    examesOriginais: [],
-    examesConcluidos: []
+    exameAtual: null
   };
 
   state.senhasChamadas.push(chamada);
 
-  io.emit('senha-chamada', { 
-    ...chamada,
-    tipo: tipoSenha === 'O' ? 'ocupacional' : 'laboratorial'
-  });
+  io.emit('senha-chamada', chamada);
   io.emit('atualizacao-fila', {
     fila: state.filaSenhas,
-    ultimasChamadas: state.senhasChamadas.filter(s => !s.finalizado).slice(-5).reverse()
+    ultimasChamadas: state.senhasChamadas
+      .filter(s => !s.finalizado)
+      .slice(-5)
+      .reverse()
   });
   io.emit('senha-chamada-exames', { senha: senhaChamada, guiche });
 
@@ -183,6 +194,8 @@ app.post('/marcar-em-atendimento', (req: Request, res: Response) => {
 
   chamada.emAtendimento = !!emAtendimento;
   chamada.exameAtual = exameAtual || null;
+
+  io.emit('atualizar-senha-consultorio', chamada);
 
   io.emit('atualizacao-atendimento', {
     id: chamada.id,
@@ -230,6 +243,7 @@ app.post('/confirmar-exames', (req: Request, res: Response) => {
       emAtendimento: true,
       exameAtual: chamada.exameAtual
     });
+    io.emit('atualizar-senha-consultorio', chamada);
   }
 
   return res.json({ sucesso: true, chamada });
@@ -292,6 +306,7 @@ app.post('/senhas-consultorio/marcar-atendido', (req: Request, res: Response) =>
     
     chamada.atendido = true;
     chamada.finalizado = true;
+    io.emit('senha-finalizada', chamada.id);
     
     io.emit('senha-atendida-consultorio', { id });
     
