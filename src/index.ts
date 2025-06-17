@@ -35,6 +35,9 @@ interface Chamada {
   atendido?: boolean;
   emAtendimento?: boolean;
   exameAtual?: string | null;
+  tipo?: 'ocupacional' | 'laboratorial';
+  examesConcluidos?: string[];
+   guicheOrigem?: number;
 }
 interface ExamePayload {
   senha: string;
@@ -125,7 +128,7 @@ app.post('/chamar', (req: Request, res: Response) => {
 
   const senhaChamada = state.filaSenhas[tipoSenha].splice(senhaIndex, 1)[0];
 
-  const chamada: Chamada = {
+ const chamada: Chamada = {
     id: gerarId(),
     senha: senhaChamada,
     guiche,
@@ -134,12 +137,20 @@ app.post('/chamar', (req: Request, res: Response) => {
     finalizado: false,
     atendido: false,
     emAtendimento: false,
-    exameAtual: null
+    exameAtual: null,
+    tipo: tipoSenha === 'O' ? 'ocupacional' : 'laboratorial' // Adicione esta linha
   };
 
   state.senhasChamadas.push(chamada);
 
-  io.emit('senha-chamada', chamada);
+  // Emitir apenas um evento com formato padronizado
+  io.emit('senha-chamada', {
+    senha: chamada.senha,
+    guiche: chamada.guiche,
+    exames: chamada.exames,
+    tipo: chamada.tipo, // Incluir o tipo
+    id: chamada.id
+  });
   io.emit('atualizacao-fila', {
     fila: state.filaSenhas,
     ultimasChamadas: state.senhasChamadas
@@ -191,7 +202,6 @@ app.post('/confirmar-exames', async (req: Request, res: Response) => {
   try {
     const { senha, guiche, exames, action, id }: ExamePayload = req.body;
 
-    // Validação básica
     if (!senha || !guiche || !exames || !Array.isArray(exames)) {
       return res.status(400).json({ 
         sucesso: false,
@@ -199,14 +209,6 @@ app.post('/confirmar-exames', async (req: Request, res: Response) => {
       });
     }
 
-    if (action === 'editar' && !id) {
-      return res.status(400).json({
-        sucesso: false,
-        mensagem: 'ID é obrigatório para edição'
-      });
-    }
-
-    // Encontra a senha no estado
     let chamada = state.senhasChamadas.find(s => 
       action === 'editar' ? s.id === id : s.senha === senha && s.guiche === guiche
     );
@@ -218,19 +220,32 @@ app.post('/confirmar-exames', async (req: Request, res: Response) => {
       });
     }
 
-    // Atualiza os exames
-    chamada.exames = [...new Set(exames)]; // Remove duplicatas
-
+    // Atualiza todos os campos relevantes
+    chamada.exames = [...new Set(exames)];
+    chamada.guicheOrigem = guiche; // Adiciona o guiche de origem
+    chamada.examesConcluidos = chamada.examesConcluidos || []; // Garante que exista
+    
     if (action === 'confirmar') {
       chamada.encaminhadoConsultorio = true;
+      chamada.emAtendimento = false;
+      chamada.exameAtual = null;
     }
 
-    // Notifica todos os clientes via Socket.IO
-    io.emit('senha-consultorio', chamada);
+    // Emite evento com todos os dados necessários
+    io.emit('senha-consultorio', {
+      id: chamada.id,
+      senha: chamada.senha,
+      exames: chamada.exames,
+      guicheOrigem: chamada.guiche,
+      emAtendimento: chamada.emAtendimento,
+      exameAtual: chamada.exameAtual,
+      examesConcluidos: chamada.examesConcluidos,
+      timestamp: chamada.timestamp
+    });
 
     res.json({
       sucesso: true,
-      mensagem: `Exames ${action === 'confirmar' ? 'confirmados' : 'atualizados'} com sucesso`
+      dados: chamada // Retorna todos os dados atualizados
     });
 
   } catch (error) {
@@ -245,27 +260,54 @@ app.post('/confirmar-exames', async (req: Request, res: Response) => {
 
 // Nova rota para marcar em atendimento
 app.post('/marcar-em-atendimento', (req: Request, res: Response) => {
-  const { id, emAtendimento, exameAtual } = req.body;
+  const { id, emAtendimento, exameAtual, examesConcluidos, exams } = req.body;
 
   const chamada = state.senhasChamadas.find(s => s.id === id);
   if (!chamada) {
     return res.status(404).json({ error: 'Senha não encontrada' });
   }
 
+  // Atualiza todos os campos relevantes
   chamada.emAtendimento = emAtendimento;
-  chamada.exameAtual = exameAtual;
+  chamada.exameAtual = exameAtual || null;
+  
+  // Mantém os exames originais se não forem fornecidos
+  if (exams && Array.isArray(exams)) {
+    chamada.exames = exams;
+  }
+  
+  // Atualiza exames concluídos sem perder os existentes
+  if (examesConcluidos && Array.isArray(examesConcluidos)) {
+    chamada.examesConcluidos = [...new Set([...(chamada.examesConcluidos || []), ...examesConcluidos])];
+  } else if (!chamada.examesConcluidos) {
+    chamada.examesConcluidos = [];
+  }
 
+  // Emite evento com todos os dados
   io.emit('atualizacao-atendimento', {
     id,
+    senha: chamada.senha,
     emAtendimento,
-    exameAtual
+    exameAtual: chamada.exameAtual,
+    exames: chamada.exames,
+    examesConcluidos: chamada.examesConcluidos,
+    guicheOrigem: chamada.guiche
+  });
+
+  io.emit('senha-consultorio', {
+    id: chamada.id,
+    senha: chamada.senha,
+    exames: chamada.exames,
+    guicheOrigem: chamada.guiche,
+    emAtendimento: chamada.emAtendimento,
+    exameAtual: chamada.exameAtual,
+    examesConcluidos: chamada.examesConcluidos,
+    timestamp: chamada.timestamp
   });
 
   res.json({ 
     sucesso: true,
-    senha: chamada.senha,
-    emAtendimento,
-    exameAtual
+    dados: chamada // Retorna todos os dados atualizados
   });
 });
 
@@ -309,6 +351,7 @@ app.get('/senhas-consultorio', (req: Request, res: Response) => {
     senhasFiltradas = senhasFiltradas.filter(s => !s.atendido);
   }
 
+  // Retorna todos os campos necessários para o frontend
   res.json(senhasFiltradas.map(s => ({
     id: s.id,
     senha: s.senha,
@@ -316,7 +359,10 @@ app.get('/senhas-consultorio', (req: Request, res: Response) => {
     guicheOrigem: s.guiche,
     timestamp: s.timestamp,
     emAtendimento: s.emAtendimento,
-    exameAtual: s.exameAtual
+    exameAtual: s.exameAtual,
+    examesConcluidos: s.examesConcluidos || [], // Garante array vazio se não existir
+    atendido: s.atendido || false,
+    finalizado: s.finalizado || false
   })));
 });
 
