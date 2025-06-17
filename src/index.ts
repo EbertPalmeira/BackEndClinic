@@ -21,7 +21,7 @@ const io = new Server(server, {
 });
 
 
-type TipoSenha = 'O' | 'L';
+type TipoSenha = 'O' | 'L' | 'P';
 
 // Interface estendida para incluir estado de atendimento
 interface Chamada {
@@ -35,7 +35,7 @@ interface Chamada {
   atendido?: boolean;
   emAtendimento?: boolean;
   exameAtual?: string | null;
-  tipo?: 'ocupacional' | 'laboratorial';
+  tipo?: 'ocupacional' | 'laboratorial' |'preferencial';
   examesConcluidos?: string[];
    guicheOrigem?: number;
 }
@@ -50,19 +50,21 @@ interface ExamePayload {
 interface Estado {
   filaSenhas: { [key in TipoSenha]: string[] };
   senhasChamadas: Chamada[];
-  contadores: { O: number; L: number };
+  contadores: { O: number; L: number,P:number };
 }
 
 // Estado principal
 const state: Estado = {
   filaSenhas: {
     O: [],
-    L: []
+    L: [],
+    P: []
   },
   senhasChamadas: [],
   contadores: {
     O: 0,
-    L: 0
+    L: 0,
+    P:0
   }
 };
 
@@ -78,8 +80,8 @@ app.get('/', (req, res) => {
 app.post('/gerar', (req: Request, res: Response) => {
   const { tipo } = req.body;
 
-  if (!tipo || !['O', 'L'].includes(tipo)) {
-    return res.status(400).json({ error: 'Tipo inválido. Use "O" ou "L".' });
+  if (!tipo || !['O', 'L', 'P'].includes(tipo)) { // Adicione 'P' na validação
+    return res.status(400).json({ error: 'Tipo inválido. Use "O", "L" ou "P".' });
   }
 
   state.contadores[tipo as TipoSenha] += 1;
@@ -118,6 +120,12 @@ app.post('/chamar', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Senha não encontrada na fila' });
   }
 
+  // Regras para senhas preferenciais (só guichê 3)
+  if (tipoSenha === 'P' && guiche !== 3) {
+    return res.status(400).json({ error: 'Senha preferencial só pode ser chamada no guichê 3' });
+  }
+
+  // Mantenha as regras existentes para outros tipos
   if (tipoSenha === 'O' && guiche === 3) {
     return res.status(400).json({ error: 'Senha ocupacional não pode ser chamada no guichê 3' });
   }
@@ -128,7 +136,7 @@ app.post('/chamar', (req: Request, res: Response) => {
 
   const senhaChamada = state.filaSenhas[tipoSenha].splice(senhaIndex, 1)[0];
 
- const chamada: Chamada = {
+  const chamada: Chamada = {
     id: gerarId(),
     senha: senhaChamada,
     guiche,
@@ -138,27 +146,18 @@ app.post('/chamar', (req: Request, res: Response) => {
     atendido: false,
     emAtendimento: false,
     exameAtual: null,
-    tipo: tipoSenha === 'O' ? 'ocupacional' : 'laboratorial' // Adicione esta linha
+    tipo: tipoSenha === 'O' ? 'ocupacional' : tipoSenha === 'L' ? 'laboratorial' : 'preferencial' // Adicione tipo preferencial
   };
 
   state.senhasChamadas.push(chamada);
 
-  // Emitir apenas um evento com formato padronizado
   io.emit('senha-chamada', {
     senha: chamada.senha,
     guiche: chamada.guiche,
     exames: chamada.exames,
-    tipo: chamada.tipo, // Incluir o tipo
+    tipo: chamada.tipo,
     id: chamada.id
   });
-  io.emit('atualizacao-fila', {
-    fila: state.filaSenhas,
-    ultimasChamadas: state.senhasChamadas
-      .filter(s => !s.finalizado)
-      .slice(-5)
-      .reverse()
-  });
-  io.emit('senha-chamada-exames', { senha: senhaChamada, guiche });
 
   res.json(chamada);
 });
